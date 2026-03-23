@@ -2048,9 +2048,9 @@ const (
 	ResponsesStreamResponseTypeWebSearchCallResultsAdded      ResponsesStreamResponseType = "response.web_search_call.results.added"
 	ResponsesStreamResponseTypeWebSearchCallResultsCompleted  ResponsesStreamResponseType = "response.web_search_call.results.completed"
 
-	ResponsesStreamResponseTypeWebFetchCallInProgress  ResponsesStreamResponseType = "response.web_fetch_call.in_progress"
-	ResponsesStreamResponseTypeWebFetchCallFetching    ResponsesStreamResponseType = "response.web_fetch_call.fetching"
-	ResponsesStreamResponseTypeWebFetchCallCompleted   ResponsesStreamResponseType = "response.web_fetch_call.completed"
+	ResponsesStreamResponseTypeWebFetchCallInProgress ResponsesStreamResponseType = "response.web_fetch_call.in_progress"
+	ResponsesStreamResponseTypeWebFetchCallFetching   ResponsesStreamResponseType = "response.web_fetch_call.fetching"
+	ResponsesStreamResponseTypeWebFetchCallCompleted  ResponsesStreamResponseType = "response.web_fetch_call.completed"
 
 	ResponsesStreamResponseTypeReasoningSummaryPartAdded ResponsesStreamResponseType = "response.reasoning_summary_part.added"
 	ResponsesStreamResponseTypeReasoningSummaryPartDone  ResponsesStreamResponseType = "response.reasoning_summary_part.done"
@@ -2121,7 +2121,7 @@ type BifrostResponsesStreamResponse struct {
 	Message *string `json:"message,omitempty"`
 	Param   *string `json:"param,omitempty"`
 
-	ExtraFields BifrostResponseExtraFields `json:"extra_fields"`
+	ExtraFields BifrostResponseExtraFields `json:"-"`
 
 	// Perplexity-specific fields
 	SearchResults []SearchResult `json:"search_results,omitempty"`
