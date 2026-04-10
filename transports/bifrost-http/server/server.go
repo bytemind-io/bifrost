@@ -34,6 +34,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/valyala/fasthttp"
 	"github.com/valyala/fasthttp/fasthttpadaptor"
+	enterprise "github.com/workpieces/bifrost/plugins/enterprise"
 )
 
 // Constants
@@ -125,6 +126,8 @@ type BifrostHTTPServer struct {
 	AuthMiddleware    *handlers.AuthMiddleware
 	TracingMiddleware *handlers.TracingMiddleware
 	WSTicketStore     *handlers.WSTicketStore
+
+	EnterpriseHandler *handlers.EnterpriseHandler
 
 	wsPool *bfws.Pool
 }
@@ -1022,6 +1025,10 @@ func (s *BifrostHTTPServer) RegisterAPIRoutes(ctx context.Context, callbacks Ser
 	if governanceHandler != nil {
 		governanceHandler.RegisterRoutes(s.Router, middlewares...)
 	}
+	// Enterprise handler (users, RBAC, audit logs)
+	if s.EnterpriseHandler != nil {
+		s.EnterpriseHandler.RegisterRoutes(s.Router, middlewares...)
+	}
 	if loggingHandler != nil {
 		loggingHandler.RegisterRoutes(s.Router, middlewares...)
 	}
@@ -1137,6 +1144,26 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 	}
 	if s.Config.KVStore != nil {
 		integrations.RegisterKVDecoders(s.Config.KVStore)
+	}
+	// Initialize enterprise stores (users, audit logs) if DB is available
+	if s.Config.ConfigStore != nil {
+		db := s.Config.ConfigStore.DB()
+		userStore, userErr := enterprise.NewUserStore(db)
+		if userErr != nil {
+			logger.Error("failed to initialize enterprise user store: %v", userErr)
+		}
+		auditStore, auditErr := enterprise.NewAuditStore(db)
+		if auditErr != nil {
+			logger.Error("failed to initialize enterprise audit store: %v", auditErr)
+		}
+		if userStore != nil && auditStore != nil {
+			s.EnterpriseHandler = handlers.NewEnterpriseHandler(userStore, auditStore, s.Config.ConfigStore)
+			// Seed a default admin user if none exists
+			if seedErr := userStore.EnsureAdminExists(ctx, "admin@bifrost.local", "Admin", "admin"); seedErr != nil {
+				logger.Warn("failed to seed default admin user: %v", seedErr)
+			}
+			logger.Info("enterprise module initialized (users, audit logs)")
+		}
 	}
 	// Initialize WebSocket handler early so plugins can wire event broadcasters during Init.
 	// Log callbacks are registered later in RegisterAPIRoutes when logging plugin is available.
@@ -1289,6 +1316,10 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 		}
 		if ctx.Value(schemas.BifrostContextKeyIsEnterprise) == nil {
 			apiMiddlewares = append(apiMiddlewares, s.AuthMiddleware.APIMiddleware())
+		}
+		// Add enterprise RBAC middleware after auth
+		if s.EnterpriseHandler != nil {
+			apiMiddlewares = append(apiMiddlewares, s.EnterpriseHandler.RBACMiddleware())
 		}
 	}
 	// Register routes

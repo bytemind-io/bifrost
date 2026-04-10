@@ -2121,7 +2121,7 @@ type BifrostResponsesStreamResponse struct {
 	Message *string `json:"message,omitempty"`
 	Param   *string `json:"param,omitempty"`
 
-	ExtraFields BifrostResponseExtraFields `json:"-"`
+	ExtraFields BifrostResponseExtraFields `json:"extra_fields"`
 
 	// Perplexity-specific fields
 	SearchResults []SearchResult `json:"search_results,omitempty"`

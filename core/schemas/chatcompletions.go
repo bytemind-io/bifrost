@@ -37,7 +37,7 @@ type BifrostChatResponse struct {
 	ServiceTier       *string                    `json:"service_tier,omitempty"`
 	SystemFingerprint string                     `json:"system_fingerprint"`
 	Usage             *BifrostLLMUsage           `json:"usage"`
-	ExtraFields       BifrostResponseExtraFields `json:"-"`
+	ExtraFields       BifrostResponseExtraFields `json:"extra_fields"`
 	ExtraParams       map[string]interface{}     `json:"-"`
 
 	// Perplexity-specific fields
