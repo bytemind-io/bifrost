@@ -76,8 +76,27 @@ func CorsMiddleware(config *lib.Config) schemas.BifrostHTTPMiddleware {
 		corsFlow:
 			origin := string(ctx.Request.Header.Peek("Origin"))
 			allowed := IsOriginAllowed(origin, config.ClientConfig.AllowedOrigins)
-			allowedHeaders := []string{"Content-Type", "Authorization", "X-Requested-With", "X-Stainless-Timeout"}
-			if len(config.ClientConfig.AllowedHeaders) > 0 {
+			// Credentialed responses are sent when the origin is not matched solely by a
+			// wildcard AllowedOrigins — i.e. the origin is localhost or explicitly listed.
+			credentialed := !slices.Contains(config.ClientConfig.AllowedOrigins, "*") ||
+				isLocalhostOrigin(origin) ||
+				slices.Contains(config.ClientConfig.AllowedOrigins, origin)
+
+			allowedHeaders := []string{"Content-Type", "Authorization", "X-Requested-With", "X-Stainless-Timeout", "X-Api-Key"}
+			if slices.Contains(config.ClientConfig.AllowedHeaders, "*") {
+				if credentialed {
+					// Per the Fetch spec, Access-Control-Allow-Headers: * is NOT treated as a
+					// wildcard when Access-Control-Allow-Credentials: true is set — browsers
+					// interpret it as a literal header name. For credentialed preflight requests,
+					// reflect back the requested headers instead.
+					if requestedHeaders := string(ctx.Request.Header.Peek("Access-Control-Request-Headers")); requestedHeaders != "" {
+						allowedHeaders = []string{requestedHeaders}
+					}
+					// For non-preflight requests (no Access-Control-Request-Headers), keep defaults.
+				} else {
+					allowedHeaders = []string{"*"}
+				}
+			} else if len(config.ClientConfig.AllowedHeaders) > 0 {
 				// append allowed headers from config to the default headers
 				for _, header := range config.ClientConfig.AllowedHeaders {
 					if !slices.Contains(allowedHeaders, header) {
@@ -90,15 +109,9 @@ func CorsMiddleware(config *lib.Config) schemas.BifrostHTTPMiddleware {
 				ctx.Response.Header.Set("Access-Control-Allow-Origin", origin)
 				ctx.Response.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD")
 				ctx.Response.Header.Set("Access-Control-Allow-Headers", strings.Join(allowedHeaders, ", "))
-			// Set Allow-Credentials for credentialed requests. Only skip when wildcard
-			// is configured AND the origin was matched by the wildcard (not by localhost rule
-			// or explicit listing). Localhost origins and explicitly listed origins always
-			// get credentials support since we return the specific origin.
-			if !slices.Contains(config.ClientConfig.AllowedOrigins, "*") ||
-				isLocalhostOrigin(origin) ||
-				slices.Contains(config.ClientConfig.AllowedOrigins, origin) {
-				ctx.Response.Header.Set("Access-Control-Allow-Credentials", "true")
-			}
+				if credentialed {
+					ctx.Response.Header.Set("Access-Control-Allow-Credentials", "true")
+				}
 				ctx.Response.Header.Set("Access-Control-Max-Age", "86400")
 				// Vary: Origin tells caches that the response varies based on the Origin
 				// request header, preventing incorrect CORS headers from being served.
@@ -493,9 +506,10 @@ func isInferenceWSEndpoint(path string) bool {
 
 // AuthMiddleware is a middleware that handles authentication for the API.
 type AuthMiddleware struct {
-	store         configstore.ConfigStore
-	authConfig    atomic.Pointer[configstore.AuthConfig]
-	wsTicketStore *WSTicketStore
+	store             configstore.ConfigStore
+	whitelistedRoutes atomic.Pointer[[]string]
+	authConfig        atomic.Pointer[configstore.AuthConfig]
+	wsTicketStore     *WSTicketStore
 }
 
 // InitAuthMiddleware initializes the auth middleware.
@@ -512,12 +526,28 @@ func InitAuthMiddleware(store configstore.ConfigStore, wsTicketStore *WSTicketSt
 		authConfig:    atomic.Pointer[configstore.AuthConfig]{},
 		wsTicketStore: wsTicketStore,
 	}
+
 	am.authConfig.Store(authConfig)
+
+	// Load whitelisted routes from client config
+	clientConfig, err := store.GetClientConfig(context.Background())
+	if err == nil && clientConfig != nil {
+		am.whitelistedRoutes.Store(&clientConfig.WhitelistedRoutes)
+	} else {
+		emptyRoutes := []string{}
+		am.whitelistedRoutes.Store(&emptyRoutes)
+	}
+
 	return am, nil
 }
 
 func (m *AuthMiddleware) UpdateAuthConfig(authConfig *configstore.AuthConfig) {
 	m.authConfig.Store(authConfig)
+}
+
+// UpdateWhitelistedRoutes updates the configured whitelisted routes that bypass auth middleware.
+func (m *AuthMiddleware) UpdateWhitelistedRoutes(routes []string) {
+	m.whitelistedRoutes.Store(&routes)
 }
 
 // InferenceMiddleware is for inference requests (including MCP routes) if authConfig is set, it will skip authentication if disableAuthOnInference is true.
@@ -536,7 +566,7 @@ func (m *AuthMiddleware) InferenceMiddleware() schemas.BifrostHTTPMiddleware {
 // Basic auth may be acceptable for limited use cases, while Bearer and WebSocket flows provide
 // session-based authentication suitable for production environments.
 func (m *AuthMiddleware) APIMiddleware() schemas.BifrostHTTPMiddleware {
-	whitelistedRoutes := []string{
+	systemWhitelistedRoutes := []string{
 		"/api/session/is-auth-enabled",
 		"/api/session/login",
 		"/api/oauth/callback",
@@ -546,11 +576,22 @@ func (m *AuthMiddleware) APIMiddleware() schemas.BifrostHTTPMiddleware {
 		"/api/oauth/callback",
 	}
 	return m.middleware(func(authConfig *configstore.AuthConfig, url string) bool {
-		if slices.Contains(whitelistedRoutes, url) ||
+		if slices.Contains(systemWhitelistedRoutes, url) ||
 			slices.IndexFunc(whitelistedPrefixes, func(prefix string) bool {
 				return strings.HasPrefix(url, prefix)
 			}) != -1 {
 			return true
+		}
+		// Check user-configured whitelisted routes
+		if configuredRoutes := m.whitelistedRoutes.Load(); configuredRoutes != nil {
+			if slices.Contains(*configuredRoutes, url) || slices.IndexFunc(*configuredRoutes, func(route string) bool {
+				if strings.HasSuffix(route, "*") {
+					return strings.HasPrefix(url, strings.TrimSuffix(route, "*"))
+				}
+				return false
+			}) != -1 {
+				return true
+			}
 		}
 		return false
 	})

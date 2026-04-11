@@ -187,6 +187,7 @@ func (provider *OpenRouterProvider) listModelsByKey(ctx *schemas.BifrostContext,
 
 	// Filter by key.Models
 	allowedModels := key.Models
+	blacklistedModels := key.BlacklistedModels
 	providerPrefix := string(schemas.OpenRouter) + "/"
 
 	if !request.Unfiltered && len(allowedModels) > 0 {
@@ -197,6 +198,9 @@ func (provider *OpenRouterProvider) listModelsByKey(ctx *schemas.BifrostContext,
 			if !(slices.Contains(allowedModels, rawID) || slices.Contains(allowedModels, providerPrefix+rawID)) {
 				continue
 			}
+			if slices.Contains(blacklistedModels, rawID) || slices.Contains(blacklistedModels, providerPrefix+rawID) {
+				continue
+			}
 			openrouterResponse.Data[i].ID = providerPrefix + rawID
 			filteredData = append(filteredData, openrouterResponse.Data[i])
 			includedModels[rawID] = true
@@ -204,6 +208,9 @@ func (provider *OpenRouterProvider) listModelsByKey(ctx *schemas.BifrostContext,
 		// Backfill allowed models not in the API response
 		for _, allowedModel := range allowedModels {
 			rawID := strings.TrimPrefix(allowedModel, providerPrefix)
+			if slices.Contains(blacklistedModels, rawID) || slices.Contains(blacklistedModels, providerPrefix+rawID) {
+				continue
+			}
 			if !includedModels[rawID] {
 				filteredData = append(filteredData, schemas.Model{
 					ID:   providerPrefix + rawID,
@@ -373,9 +380,21 @@ func (provider *OpenRouterProvider) ResponsesStream(ctx *schemas.BifrostContext,
 	)
 }
 
-// Embedding is not supported by the OpenRouter provider.
+// Embedding performs an embedding request to the OpenRouter API.
 func (provider *OpenRouterProvider) Embedding(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostEmbeddingRequest) (*schemas.BifrostEmbeddingResponse, *schemas.BifrostError) {
-	return nil, providerUtils.NewUnsupportedOperationError(schemas.EmbeddingRequest, provider.GetProviderKey())
+	return openai.HandleOpenAIEmbeddingRequest(
+		ctx,
+		provider.client,
+		provider.networkConfig.BaseURL+providerUtils.GetPathFromContext(ctx, "/v1/embeddings"),
+		request,
+		key,
+		provider.networkConfig.ExtraHeaders,
+		provider.GetProviderKey(),
+		providerUtils.ShouldSendBackRawRequest(ctx, provider.sendBackRawRequest),
+		providerUtils.ShouldSendBackRawResponse(ctx, provider.sendBackRawResponse),
+		nil,
+		provider.logger,
+	)
 }
 
 // Speech is not supported by the OpenRouter provider.
@@ -386,6 +405,11 @@ func (provider *OpenRouterProvider) Speech(ctx *schemas.BifrostContext, key sche
 // Rerank is not supported by the OpenRouter provider.
 func (provider *OpenRouterProvider) Rerank(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostRerankRequest) (*schemas.BifrostRerankResponse, *schemas.BifrostError) {
 	return nil, providerUtils.NewUnsupportedOperationError(schemas.RerankRequest, provider.GetProviderKey())
+}
+
+// OCR is not supported by the Openrouter provider.
+func (provider *OpenRouterProvider) OCR(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostOCRRequest) (*schemas.BifrostOCRResponse, *schemas.BifrostError) {
+	return nil, providerUtils.NewUnsupportedOperationError(schemas.OCRRequest, provider.GetProviderKey())
 }
 
 // SpeechStream is not supported by the OpenRouter provider.

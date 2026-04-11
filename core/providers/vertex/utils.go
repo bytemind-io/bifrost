@@ -9,7 +9,7 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 )
 
-func getRequestBodyForAnthropicResponses(ctx *schemas.BifrostContext, request *schemas.BifrostResponsesRequest, deployment string, providerName schemas.ModelProvider, isStreaming bool, isCountTokens bool) ([]byte, *schemas.BifrostError) {
+func getRequestBodyForAnthropicResponses(ctx *schemas.BifrostContext, request *schemas.BifrostResponsesRequest, deployment string, providerName schemas.ModelProvider, isStreaming bool, isCountTokens bool, betaHeaderOverrides map[string]bool, providerExtraHeaders map[string]string) ([]byte, *schemas.BifrostError) {
 	// Large payload mode: body streams directly from the LP reader — skip all body building
 	// (matches CheckContextAndGetRequestBody guard).
 	if providerUtils.IsLargePayloadPassthroughEnabled(ctx) {
@@ -39,7 +39,7 @@ func getRequestBodyForAnthropicResponses(ctx *schemas.BifrostContext, request *s
 		} else {
 			// Add max_tokens if not present
 			if !providerUtils.JSONFieldExists(jsonBody, "max_tokens") {
-				jsonBody, err = providerUtils.SetJSONField(jsonBody, "max_tokens", anthropic.AnthropicDefaultMaxTokens)
+				jsonBody, err = providerUtils.SetJSONField(jsonBody, "max_tokens", providerUtils.GetMaxOutputTokensOrDefault(deployment, anthropic.AnthropicDefaultMaxTokens))
 				if err != nil {
 					return nil, providerUtils.NewBifrostOperationError(schemas.ErrProviderRequestMarshal, err, providerName)
 				}
@@ -120,20 +120,6 @@ func getRequestBodyForAnthropicResponses(ctx *schemas.BifrostContext, request *s
 			}
 		}
 
-		// Inject beta headers into body as anthropic_beta (Vertex uses body field, not HTTP header)
-		if extraHeaders, ok := ctx.Value(schemas.BifrostContextKeyExtraHeaders).(map[string][]string); ok {
-			betaHeaders, betaErr := anthropic.FilterBetaHeadersForProvider(extraHeaders["anthropic-beta"], schemas.Vertex)
-			if betaErr != nil {
-				return nil, providerUtils.NewBifrostOperationError(schemas.ErrProviderRequestMarshal, betaErr, providerName)
-			}
-			if len(betaHeaders) > 0 {
-				jsonBody, err = providerUtils.SetJSONField(jsonBody, "anthropic_beta", betaHeaders)
-				if err != nil {
-					return nil, providerUtils.NewBifrostOperationError(schemas.ErrProviderRequestMarshal, err, providerName)
-				}
-			}
-		}
-
 		if isCountTokens {
 			jsonBody, err = providerUtils.DeleteJSONField(jsonBody, "max_tokens")
 			if err != nil {
@@ -152,6 +138,13 @@ func getRequestBodyForAnthropicResponses(ctx *schemas.BifrostContext, request *s
 		}
 
 		jsonBody, err = providerUtils.DeleteJSONField(jsonBody, "region")
+		if err != nil {
+			return nil, providerUtils.NewBifrostOperationError(schemas.ErrProviderRequestMarshal, err, providerName)
+		}
+	}
+
+	if betaHeaders := anthropic.FilterBetaHeadersForProvider(anthropic.MergeBetaHeaders(providerExtraHeaders, ctx), schemas.Vertex, betaHeaderOverrides); len(betaHeaders) > 0 {
+		jsonBody, err = providerUtils.SetJSONField(jsonBody, "anthropic_beta", betaHeaders)
 		if err != nil {
 			return nil, providerUtils.NewBifrostOperationError(schemas.ErrProviderRequestMarshal, err, providerName)
 		}
@@ -185,7 +178,7 @@ func getCompleteURLForGeminiEndpoint(deployment string, region string, projectID
 
 // buildResponseFromConfig builds a list models response from configured deployments and allowedModels.
 // This is used when the user has explicitly configured which models they want to use.
-func buildResponseFromConfig(deployments map[string]string, allowedModels []string) *schemas.BifrostListModelsResponse {
+func buildResponseFromConfig(deployments map[string]string, allowedModels []string, blacklistedModels []string) *schemas.BifrostListModelsResponse {
 	response := &schemas.BifrostListModelsResponse{
 		Data: make([]schemas.Model, 0),
 	}
@@ -197,10 +190,17 @@ func buildResponseFromConfig(deployments map[string]string, allowedModels []stri
 	for _, m := range allowedModels {
 		allowedSet[m] = true
 	}
+	blacklistedSet := make(map[string]bool, len(blacklistedModels))
+	for _, m := range blacklistedModels {
+		blacklistedSet[m] = true
+	}
 
 	// First add models from deployments (filtered by allowedModels when set)
 	for alias, deploymentValue := range deployments {
 		if len(allowedSet) > 0 && !allowedSet[alias] {
+			continue
+		}
+		if len(blacklistedSet) > 0 && blacklistedSet[alias] {
 			continue
 		}
 		modelID := string(schemas.Vertex) + "/" + alias
@@ -221,6 +221,9 @@ func buildResponseFromConfig(deployments map[string]string, allowedModels []stri
 
 	// Then add models from allowedModels that aren't already in deployments
 	for _, allowedModel := range allowedModels {
+		if len(blacklistedSet) > 0 && blacklistedSet[allowedModel] {
+			continue
+		}
 		modelID := string(schemas.Vertex) + "/" + allowedModel
 		if addedModelIDs[modelID] {
 			continue

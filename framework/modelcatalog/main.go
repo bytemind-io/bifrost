@@ -9,7 +9,10 @@ import (
 	"sync"
 	"time"
 
+	"encoding/json"
+
 	"github.com/bytedance/sonic"
+	providerUtils "github.com/maximhq/bifrost/core/providers/utils"
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore"
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
@@ -17,6 +20,7 @@ import (
 
 // Default sync interval and config key
 const (
+	TokenTierAbove272K = 272000
 	TokenTierAbove200K = 200000
 	TokenTierAbove128K = 128000
 )
@@ -62,6 +66,11 @@ type PricingEntry struct {
 	Provider  string `json:"provider"`
 	Mode      string `json:"mode"`
 
+	ContextLength   *int                  `json:"context_length,omitempty"`
+	MaxInputTokens  *int                  `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens *int                  `json:"max_output_tokens,omitempty"`
+	Architecture    *schemas.Architecture `json:"architecture,omitempty"`
+
 	// Costs - Text
 	InputCostPerToken          float64  `json:"input_cost_per_token"`
 	OutputCostPerToken         float64  `json:"output_cost_per_token"`
@@ -77,19 +86,29 @@ type PricingEntry struct {
 	InputCostPerAudioPerSecondAbove128kTokens *float64 `json:"input_cost_per_audio_per_second_above_128k_tokens,omitempty"`
 	OutputCostPerTokenAbove128kTokens         *float64 `json:"output_cost_per_token_above_128k_tokens,omitempty"`
 	// Costs - 200k Tier
-	InputCostPerTokenAbove200kTokens  *float64 `json:"input_cost_per_token_above_200k_tokens,omitempty"`
-	OutputCostPerTokenAbove200kTokens *float64 `json:"output_cost_per_token_above_200k_tokens,omitempty"`
+	InputCostPerTokenAbove200kTokens         *float64 `json:"input_cost_per_token_above_200k_tokens,omitempty"`
+	InputCostPerTokenAbove200kTokensPriority *float64 `json:"input_cost_per_token_above_200k_tokens_priority,omitempty"`
+	OutputCostPerTokenAbove200kTokens         *float64 `json:"output_cost_per_token_above_200k_tokens,omitempty"`
+	OutputCostPerTokenAbove200kTokensPriority *float64 `json:"output_cost_per_token_above_200k_tokens_priority,omitempty"`
+	// Costs - 272k Tier
+	InputCostPerTokenAbove272kTokens          *float64 `json:"input_cost_per_token_above_272k_tokens,omitempty"`
+	InputCostPerTokenAbove272kTokensPriority  *float64 `json:"input_cost_per_token_above_272k_tokens_priority,omitempty"`
+	OutputCostPerTokenAbove272kTokens         *float64 `json:"output_cost_per_token_above_272k_tokens,omitempty"`
+	OutputCostPerTokenAbove272kTokensPriority *float64 `json:"output_cost_per_token_above_272k_tokens_priority,omitempty"`
 
 	// Costs - Cache
 	CacheCreationInputTokenCost                        *float64 `json:"cache_creation_input_token_cost,omitempty"`
 	CacheReadInputTokenCost                            *float64 `json:"cache_read_input_token_cost,omitempty"`
 	CacheCreationInputTokenCostAbove200kTokens         *float64 `json:"cache_creation_input_token_cost_above_200k_tokens,omitempty"`
 	CacheReadInputTokenCostAbove200kTokens             *float64 `json:"cache_read_input_token_cost_above_200k_tokens,omitempty"`
+	CacheReadInputTokenCostAbove200kTokensPriority     *float64 `json:"cache_read_input_token_cost_above_200k_tokens_priority,omitempty"`
 	CacheCreationInputTokenCostAbove1hr                *float64 `json:"cache_creation_input_token_cost_above_1hr,omitempty"`
 	CacheCreationInputTokenCostAbove1hrAbove200kTokens *float64 `json:"cache_creation_input_token_cost_above_1hr_above_200k_tokens,omitempty"`
 	CacheCreationInputAudioTokenCost                   *float64 `json:"cache_creation_input_audio_token_cost,omitempty"`
 	CacheReadInputTokenCostPriority                    *float64 `json:"cache_read_input_token_cost_priority,omitempty"`
 	CacheReadInputImageTokenCost                       *float64 `json:"cache_read_input_image_token_cost,omitempty"`
+	CacheReadInputTokenCostAbove272kTokens             *float64 `json:"cache_read_input_token_cost_above_272k_tokens,omitempty"`
+	CacheReadInputTokenCostAbove272kTokensPriority     *float64 `json:"cache_read_input_token_cost_above_272k_tokens_priority,omitempty"`
 
 	// Costs - Image
 	InputCostPerImage                             *float64 `json:"input_cost_per_image,omitempty"`
@@ -185,8 +204,13 @@ func Init(ctx context.Context, config *Config, configStore configstore.ConfigSto
 	}
 	pricingSyncInterval := DefaultPricingSyncInterval
 	if config.PricingSyncInterval != nil {
-		pricingSyncInterval = *config.PricingSyncInterval
+		pricingSyncInterval = time.Duration(*config.PricingSyncInterval) * time.Second
 	}
+
+	// Log the active interval and the scheduler's actual check frequency so operators
+	// are not surprised that setting interval=1h does not mean checks happen every second.
+	// Actual syncs occur when: (1) the 1-hour ticker fires AND (2) time.Since(lastSync) >= pricingSyncInterval.
+	logger.Info("pricing sync interval set to %v (scheduler checks every %v)", pricingSyncInterval, syncWorkerTickerPeriod)
 
 	mc := &ModelCatalog{
 		pricingURL:             pricingURL,
@@ -205,6 +229,23 @@ func Init(ctx context.Context, config *Config, configStore configstore.ConfigSto
 
 	logger.Info("initializing model catalog...")
 	if configStore != nil {
+		// Register a cache miss handler so that on first request for a model,
+		// the cache lazily loads its parameters from the database.
+		providerUtils.SetCacheMissHandler(func(model string) *providerUtils.ModelParams {
+			missCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			params, err := configStore.GetModelParameters(missCtx, model)
+			if err != nil || params == nil {
+				return nil
+			}
+			var p struct {
+				MaxOutputTokens *int `json:"max_output_tokens"`
+			}
+			if err := json.Unmarshal([]byte(params.Data), &p); err != nil || p.MaxOutputTokens == nil {
+				return nil
+			}
+			return &providerUtils.ModelParams{MaxOutputTokens: p.MaxOutputTokens}
+		})
 		if mc.distributedLockManager == nil {
 			if err := mc.loadPricingFromDatabase(ctx); err != nil {
 				return nil, fmt.Errorf("failed to load initial pricing data: %w", err)
@@ -223,7 +264,7 @@ func Init(ctx context.Context, config *Config, configStore configstore.ConfigSto
 			if err != nil {
 				return nil, fmt.Errorf("failed to create model catalog pricing sync lock: %w", err)
 			}
-			if err := lock.Lock(ctx); err != nil {
+			if err := lock.LockWithRetry(ctx, 10); err != nil {
 				return nil, fmt.Errorf("failed to acquire model catalog pricing sync lock: %w", err)
 			}
 			defer lock.Unlock(ctx)
@@ -277,7 +318,7 @@ func (mc *ModelCatalog) ReloadPricing(ctx context.Context, config *Config) error
 	}
 	mc.pricingSyncInterval = DefaultPricingSyncInterval
 	if config.PricingSyncInterval != nil {
-		mc.pricingSyncInterval = *config.PricingSyncInterval
+		mc.pricingSyncInterval = time.Duration(*config.PricingSyncInterval) * time.Second
 	}
 
 	// Create new sync worker with updated configuration
@@ -368,6 +409,107 @@ func (mc *ModelCatalog) GetPricingEntryForModel(model string, provider schemas.M
 		}
 	}
 	return nil
+}
+
+// GetModelCapabilityEntryForModel returns capability metadata for a model/provider pair.
+// It prefers chat, then responses, then text-completion entries; if none exist,
+// it falls back to the lexicographically first available mode for deterministic behavior.
+func (mc *ModelCatalog) GetModelCapabilityEntryForModel(model string, provider schemas.ModelProvider) *PricingEntry {
+	mc.mu.RLock()
+	defer mc.mu.RUnlock()
+
+	if entry := mc.getCapabilityEntryForExactModelUnsafe(model, provider); entry != nil {
+		return entry
+	}
+
+	baseModel := mc.getBaseModelNameUnsafe(model)
+	if baseModel != model {
+		if entry := mc.getCapabilityEntryForExactModelUnsafe(baseModel, provider); entry != nil {
+			return entry
+		}
+	}
+
+	if entry := mc.getCapabilityEntryForModelFamilyUnsafe(baseModel, provider); entry != nil {
+		return entry
+	}
+
+	return nil
+}
+
+func (mc *ModelCatalog) getCapabilityEntryForExactModelUnsafe(model string, provider schemas.ModelProvider) *PricingEntry {
+	preferredModes := []schemas.RequestType{
+		schemas.ChatCompletionRequest,
+		schemas.ResponsesRequest,
+		schemas.TextCompletionRequest,
+	}
+
+	for _, mode := range preferredModes {
+		key := makeKey(model, string(provider), normalizeRequestType(mode))
+		pricing, ok := mc.pricingData[key]
+		if ok {
+			return convertTableModelPricingToPricingData(&pricing)
+		}
+	}
+
+	prefix := model + "|" + string(provider) + "|"
+	matchingKeys := make([]string, 0)
+	for key := range mc.pricingData {
+		if strings.HasPrefix(key, prefix) {
+			matchingKeys = append(matchingKeys, key)
+		}
+	}
+	return mc.selectCapabilityEntryFromKeysUnsafe(matchingKeys)
+}
+
+func (mc *ModelCatalog) getCapabilityEntryForModelFamilyUnsafe(baseModel string, provider schemas.ModelProvider) *PricingEntry {
+	if baseModel == "" {
+		return nil
+	}
+
+	matchingKeys := make([]string, 0)
+	for key, pricing := range mc.pricingData {
+		if normalizeProvider(pricing.Provider) != string(provider) {
+			continue
+		}
+		if mc.getBaseModelNameUnsafe(pricing.Model) != baseModel {
+			continue
+		}
+		matchingKeys = append(matchingKeys, key)
+	}
+	return mc.selectCapabilityEntryFromKeysUnsafe(matchingKeys)
+}
+
+func (mc *ModelCatalog) selectCapabilityEntryFromKeysUnsafe(matchingKeys []string) *PricingEntry {
+	if len(matchingKeys) == 0 {
+		return nil
+	}
+
+	preferredModes := []string{
+		normalizeRequestType(schemas.ChatCompletionRequest),
+		normalizeRequestType(schemas.ResponsesRequest),
+		normalizeRequestType(schemas.TextCompletionRequest),
+	}
+
+	for _, mode := range preferredModes {
+		modeMatches := make([]string, 0)
+		for _, key := range matchingKeys {
+			parts := strings.SplitN(key, "|", 3)
+			if len(parts) != 3 || parts[2] != mode {
+				continue
+			}
+			modeMatches = append(modeMatches, key)
+		}
+		if len(modeMatches) == 0 {
+			continue
+		}
+		slices.Sort(modeMatches)
+		pricing := mc.pricingData[modeMatches[0]]
+		return convertTableModelPricingToPricingData(&pricing)
+	}
+
+	slices.Sort(matchingKeys)
+	pricing := mc.pricingData[matchingKeys[0]]
+	return convertTableModelPricingToPricingData(&pricing)
 }
 
 // GetModelsForProvider returns all available models for a given provider (thread-safe)
@@ -626,7 +768,7 @@ func (mc *ModelCatalog) DeleteModelDataForProvider(provider schemas.ModelProvide
 }
 
 // UpsertModelDataForProvider upserts model data for a given provider
-func (mc *ModelCatalog) UpsertModelDataForProvider(provider schemas.ModelProvider, modelData *schemas.BifrostListModelsResponse, allowedModels []schemas.Model) {
+func (mc *ModelCatalog) UpsertModelDataForProvider(provider schemas.ModelProvider, modelData *schemas.BifrostListModelsResponse, allowedModels []schemas.Model, deniedModels []schemas.Model) {
 	if modelData == nil {
 		return
 	}
@@ -655,7 +797,7 @@ func (mc *ModelCatalog) UpsertModelDataForProvider(provider schemas.ModelProvide
 		}
 	}
 	// If modelData is empty, then we allow all models
-	if len(modelData.Data) == 0 && len(allowedModels) == 0 {
+	if len(modelData.Data) == 0 && len(allowedModels) == 0 && len(deniedModels) == 0 {
 		mc.modelPool[provider] = providerModels
 		return
 	}
@@ -686,9 +828,17 @@ func (mc *ModelCatalog) UpsertModelDataForProvider(provider schemas.ModelProvide
 			finalModelList = append(finalModelList, parsedModel)
 		}
 	}
-	// If there are no allowed models, we add all models from the provider models
+
 	if len(allowedModels) == 0 {
+		deniedSet := make(map[string]struct{}, len(deniedModels))
+		for _, d := range deniedModels {
+			_, modelName := schemas.ParseModelString(d.ID, "")
+			deniedSet[modelName] = struct{}{}
+		}
 		for _, model := range providerModels {
+			if _, denied := deniedSet[model]; denied {
+				continue
+			}
 			if !seenModels[model] {
 				seenModels[model] = true
 				finalModelList = append(finalModelList, model)
@@ -742,38 +892,53 @@ func (mc *ModelCatalog) UpsertUnfilteredModelDataForProvider(provider schemas.Mo
 // - When the provider is not handled or no refinement is needed, returns the original model unchanged
 func (mc *ModelCatalog) RefineModelForProvider(provider schemas.ModelProvider, model string) (string, error) {
 	switch provider {
-	// These providers have {provider}/{model} format for models
 	case schemas.Groq:
 		if strings.Contains(model, "gpt-") {
 			return "openai/" + model, nil
 		}
-		// Check if the model without provider prefix is present in the provider's catalog
-		// Guard concurrent access to mc.modelPool with read lock
-		mc.mu.RLock()
-		models, ok := mc.modelPool[provider]
-		mc.mu.RUnlock()
-
-		if ok {
-			var candidateModels []string
-			for _, poolModel := range models {
-				providerPart, modelPart := schemas.ParseModelString(poolModel, "")
-				if model == modelPart {
-					candidateModels = append(candidateModels, string(providerPart)+"/"+modelPart)
-				}
-			}
-			// Handle candidateModels based on count
-			if len(candidateModels) == 1 {
-				return candidateModels[0], nil
-			} else if len(candidateModels) == 0 {
-				// No matches found, return original model to allow fallback
-				return model, nil
-			} else {
-				// Multiple matches found, return error
-				return "", fmt.Errorf("multiple compatible models found for model %s: %v", model, candidateModels)
-			}
-		}
+		return mc.refineNestedProviderModel(provider, model)
+	case schemas.Replicate:
+		return mc.refineNestedProviderModel(provider, model)
 	}
 	return model, nil
+}
+
+// refineNestedProviderModel resolves provider-native model slugs such as
+// "openai/gpt-5-nano" from a base model request like "gpt-5-nano".
+// It only considers catalog entries whose leading segment is a known Bifrost provider,
+// so Replicate owner/model identifiers like "meta/llama-3-8b" are left untouched.
+func (mc *ModelCatalog) refineNestedProviderModel(provider schemas.ModelProvider, model string) (string, error) {
+	mc.mu.RLock()
+	models, ok := mc.modelPool[provider]
+	mc.mu.RUnlock()
+	if !ok {
+		return model, nil
+	}
+
+	candidateModels := make([]string, 0)
+	seenCandidates := make(map[string]struct{})
+	for _, poolModel := range models {
+		providerPart, modelPart := schemas.ParseModelString(poolModel, "")
+		if providerPart == "" || model != modelPart {
+			continue
+		}
+
+		candidate := string(providerPart) + "/" + modelPart
+		if _, seen := seenCandidates[candidate]; seen {
+			continue
+		}
+		seenCandidates[candidate] = struct{}{}
+		candidateModels = append(candidateModels, candidate)
+	}
+
+	switch len(candidateModels) {
+	case 0:
+		return model, nil
+	case 1:
+		return candidateModels[0], nil
+	default:
+		return "", fmt.Errorf("multiple compatible models found for model %s: %v", model, candidateModels)
+	}
 }
 
 // IsTextCompletionSupported checks if a model supports text completion for the given provider.

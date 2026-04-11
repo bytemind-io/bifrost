@@ -68,7 +68,12 @@ func ToCohereChatCompletionRequest(bifrostReq *schemas.BifrostChatRequest) (*Coh
 				}
 
 				// Arguments is a string, not a pointer, so it's safe to access directly
-				functionArguments = toolCall.Function.Arguments
+				// Default to "{}" if empty to ensure the field is always present.
+				if toolCall.Function.Arguments == "" {
+					functionArguments = "{}"
+				} else {
+					functionArguments = toolCall.Function.Arguments
+				}
 
 				cohereToolCall := CohereToolCall{
 					ID:   toolCall.ID,
@@ -118,7 +123,7 @@ func ToCohereChatCompletionRequest(bifrostReq *schemas.BifrostChatRequest) (*Coh
 				cohereReq.Thinking = thinking
 			} else if bifrostReq.Params.Reasoning.Effort != nil {
 				if *bifrostReq.Params.Reasoning.Effort != "none" {
-					maxCompletionTokens := DefaultCompletionMaxTokens
+					maxCompletionTokens := providerUtils.GetMaxOutputTokensOrDefault(bifrostReq.Model, DefaultCompletionMaxTokens)
 					if bifrostReq.Params.MaxCompletionTokens != nil {
 						maxCompletionTokens = *bifrostReq.Params.MaxCompletionTokens
 					}

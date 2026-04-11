@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
-import { useLazyGetLogByIdQuery } from "@/lib/store/apis/logsApi";
+import { useEffect, useState } from "react";
+import { useHotkeys } from "react-hotkeys-hook";
+import { useGetLogByIdQuery } from "@/lib/store/apis/logsApi";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -28,7 +29,8 @@ import {
 	StatusColors,
 } from "@/lib/constants/logs";
 import { LogEntry } from "@/lib/types/logs";
-import { Clipboard, Loader2, MoreVertical, Trash2 } from "lucide-react";
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+import { ChevronDown, ChevronUp, Clipboard, Loader2, MoreVertical, Trash2 } from "lucide-react";
 import moment from "moment";
 import { toast } from "sonner";
 import BlockHeader from "../views/blockHeader";
@@ -55,6 +57,9 @@ interface LogDetailSheetProps {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	handleDelete: (log: LogEntry) => void;
+	onNavigate?: (direction: "prev" | "next") => void;
+	hasPrev?: boolean;
+	hasNext?: boolean;
 }
 
 // Helper to detect passthrough operations
@@ -77,19 +82,27 @@ const isContainerOperation = (object: string) => {
 	return containerTypes.includes(object?.toLowerCase());
 };
 
-export function LogDetailSheet({ log, open, onOpenChange, handleDelete }: LogDetailSheetProps) {
-	const [fetchLog, { data: fullLog, isFetching }] = useLazyGetLogByIdQuery();
-
+export function LogDetailSheet({ log, open, onOpenChange, handleDelete, onNavigate, hasPrev = false, hasNext = false }: LogDetailSheetProps) {
+	const { copy: copyRequestId } = useCopyToClipboard({ successMessage: "Request ID copied" });
+	const { copy: copyBody } = useCopyToClipboard({ successMessage: "Request body copied to clipboard", errorMessage: "Failed to copy request body" });
+	const [pollingInterval, setPollingInterval] = useState(0);
+	const { data: fullLog, isLoading, isError } = useGetLogByIdQuery(log?.id ?? "", {
+		skip: !open || !log?.id,
+		pollingInterval,
+	});
+	const shouldPoll = isError || fullLog?.status === "processing";
 	useEffect(() => {
-		if (open && log?.id) {
-			fetchLog(log.id);
-		}
-	}, [open, log?.id, fetchLog]);
+		setPollingInterval(shouldPoll ? 2000 : 0);
+	}, [shouldPoll]);
+
+	// Keyboard navigation: arrow up/down to navigate between logs
+	useHotkeys("up", () => onNavigate?.("prev"), { enabled: open && hasPrev, preventDefault: true });
+	useHotkeys("down", () => onNavigate?.("next"), { enabled: open && hasNext, preventDefault: true });
 
 	if (!log) return null;
 
-	// Show a loader until the full log data is fetched from the dedicated single-log endpoint.
-	const isFullDataReady = fullLog?.id === log.id && !isFetching;
+	// Show a loader only on the initial fetch, not during background polling refetches.
+	const isFullDataReady = fullLog?.id === log.id && !isLoading;
 	const displayLog = isFullDataReady ? fullLog : log;
 
 	const isContainer = isContainerOperation(displayLog.object);
@@ -126,24 +139,20 @@ export function LogDetailSheet({ log, open, onOpenChange, handleDelete }: LogDet
 			<SheetContent className="flex w-full flex-col gap-4 overflow-x-hidden p-8 sm:max-w-[60%]">
 				{!isFullDataReady ? (
 					<div className="flex h-full items-center justify-center">
+						<SheetTitle className="sr-only">Loading log details</SheetTitle>
 						<Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
 					</div>
 				) : (
 				<>
-				<SheetHeader className="flex flex-row items-center px-0">
-					<div className="flex w-full items-center justify-between">
-						<SheetTitle className="flex w-fit items-center gap-2 font-medium">
+				<SheetHeader className="flex flex-row items-center px-0 overflow-x-hidden">
+					<div className="flex w-full items-center justify-between overflow-x-hidden">
+						<SheetTitle className="flex w-fit items-center gap-2 font-medium overflow-x-hidden">
 							{displayLog.id && (
 								<p className="text-md max-w-full truncate">
 									Request ID:{" "}
 									<code
 										className="text-normal cursor-pointer"
-										onClick={() => {
-											navigator.clipboard
-												.writeText(displayLog.id)
-												.then(() => toast.success("Request ID copied"))
-												.catch(() => toast.error("Failed to copy"));
-										}}
+										onClick={() => copyRequestId(displayLog.id)}
 									>
 										{displayLog.id}
 									</code>
@@ -167,15 +176,23 @@ export function LogDetailSheet({ log, open, onOpenChange, handleDelete }: LogDet
 							)}
 						</SheetTitle>
 					</div>
+					<div className="flex items-center">
+						<Button variant="ghost" className="size-8" disabled={!hasPrev} onClick={() => onNavigate?.("prev")} aria-label="Previous log" data-testid="logdetails-prev-button" type="button">
+							<ChevronUp className="size-4" />
+						</Button>
+						<Button variant="ghost" className="size-8" disabled={!hasNext} onClick={() => onNavigate?.("next")} aria-label="Next log" data-testid="logdetails-next-button" type="button">
+							<ChevronDown className="size-4" />
+						</Button>
+					</div>
 					<AlertDialog>
 						<DropdownMenu>
 							<DropdownMenuTrigger asChild>
-								<Button variant="ghost" size="icon">
+								<Button variant="ghost" className="size-8" type="button">
 									<MoreVertical className="h-3 w-3" />
 								</Button>
 							</DropdownMenuTrigger>
 							<DropdownMenuContent align="end">
-								<DropdownMenuItem onClick={() => copyRequestBody(displayLog)} data-testid="logdetails-copy-request-body-button">
+								<DropdownMenuItem onClick={() => copyRequestBody(displayLog, copyBody)} data-testid="logdetails-copy-request-body-button">
 									<Clipboard className="h-4 w-4" />
 									Copy request body
 								</DropdownMenuItem>
@@ -881,7 +898,7 @@ const normalizeObjectForCopy = (object: string | undefined): string => {
 	return mapping[normalized] ?? normalized;
 };
 
-const copyRequestBody = async (log: LogEntry) => {
+const copyRequestBody = async (log: LogEntry, copy: (text: string) => Promise<void>) => {
 	try {
 		// Check if request is for responses, chat, speech, text completion, or embedding (exclude transcriptions)
 		const object = normalizeObjectForCopy(log.object);
@@ -990,14 +1007,7 @@ const copyRequestBody = async (log: LogEntry) => {
 		}
 
 		const requestBodyJson = JSON.stringify(requestBody, null, 2);
-		navigator.clipboard
-			.writeText(requestBodyJson)
-			.then(() => {
-				toast.success("Request body copied to clipboard");
-			})
-			.catch((error) => {
-				toast.error("Failed to copy request body");
-			});
+		await copy(requestBodyJson);
 	} catch (error) {
 		toast.error("Failed to copy request body");
 	}

@@ -5,8 +5,6 @@ set -e
 # Usage: ./test-docker-image.sh <platform>
 # Example: ./test-docker-image.sh linux/amd64
 
-exit 0
-
 # Get the absolute path of the script directory
 if command -v readlink >/dev/null 2>&1 && readlink -f "$0" >/dev/null 2>&1; then
   SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
@@ -290,13 +288,13 @@ fi
 
 # echo pwd: $(pwd)
 # # Run the E2E API test scripts (marked as flaky - failures are logged but don't block)
-# if ! ./tests/e2e/api/run-newman-tests.sh; then
-#   echo "WARNING: run-newman-tests.sh failed (flaky test - continuing)"
+# if ! ./tests/e2e/api/runners/run-newman-inference-tests.sh; then
+#   echo "WARNING: runners/run-newman-inference-tests.sh failed (flaky test - continuing)"
 # fi
 # if ! ./tests/e2e/api/run-all-integrations.sh; then
 #   echo "WARNING: run-all-integrations.sh failed (flaky test - continuing)"
 # fi
-# if ! ./tests/e2e/api/run-newman-api-tests.sh; then
+# if ! ./tests/e2e/api/runners/run-newman-api-tests.sh; then
 #   echo "WARNING: run-newman-api-tests.sh failed (flaky test - continuing)"
 # fi
 

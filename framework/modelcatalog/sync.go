@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	providerUtils "github.com/maximhq/bifrost/core/providers/utils"
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
 	"gorm.io/gorm"
 )
@@ -123,8 +124,28 @@ func (mc *ModelCatalog) syncPricing(ctx context.Context) error {
 		return fmt.Errorf("failed to reload pricing cache: %w", err)
 	}
 
+	// Populate model params cache from pricing datasheet max_output_tokens
+	mc.populateModelParamsFromPricing(pricingData)
+
 	mc.logger.Info("successfully synced %d pricing records", len(pricingData))
 	return nil
+}
+
+// populateModelParamsFromPricing extracts max_output_tokens from pricing entries
+// and populates the model params cache so that providers can look up max output
+// tokens without a separate model-parameters sync.
+func (mc *ModelCatalog) populateModelParamsFromPricing(pricingData map[string]PricingEntry) {
+	modelParamsEntries := make(map[string]providerUtils.ModelParams)
+	for modelKey, entry := range pricingData {
+		if entry.MaxOutputTokens != nil {
+			modelName := extractModelName(modelKey)
+			modelParamsEntries[modelName] = providerUtils.ModelParams{MaxOutputTokens: entry.MaxOutputTokens}
+		}
+	}
+	if len(modelParamsEntries) > 0 {
+		providerUtils.BulkSetModelParams(modelParamsEntries)
+		mc.logger.Debug("populated %d model params entries from pricing datasheet", len(modelParamsEntries))
+	}
 }
 
 // loadPricingFromURL loads pricing data from the remote URL
@@ -182,6 +203,9 @@ func (mc *ModelCatalog) loadPricingIntoMemory(ctx context.Context) error {
 		mc.pricingData[key] = pricing
 	}
 
+	// Populate model params cache from pricing datasheet max_output_tokens
+	mc.populateModelParamsFromPricing(pricingData)
+
 	return nil
 }
 
@@ -212,8 +236,22 @@ func (mc *ModelCatalog) loadPricingFromDatabase(ctx context.Context) error {
 
 // startSyncWorker starts the background sync worker
 func (mc *ModelCatalog) startSyncWorker(ctx context.Context) {
-	// Use a ticker that checks every hour, but only sync when needed
-	mc.syncTicker = time.NewTicker(1 * time.Hour)
+	// IMPORTANT: scheduling model
+	//
+	// The sync worker wakes on a fixed ticker (syncWorkerTickerPeriod = 1h).
+	// On each wake it calls checkAndSyncPricing, which checks:
+	//
+	//   time.Since(lastSyncTimestamp) >= pricingSyncInterval
+	//
+	// This means:
+	//   • pricingSyncInterval defines the *minimum elapsed time* between syncs.
+	//   • The actual sync frequency = max(syncWorkerTickerPeriod, pricingSyncInterval).
+	//   • Setting pricingSyncInterval < 1h does NOT increase sync frequency —
+	//     the hourly ticker is the hard lower bound on check granularity.
+	//
+	// Design rationale: avoids high-frequency polling while allowing operators to
+	// tune how stale pricing data can get (e.g., 1h vs 24h vs 7d).
+	mc.syncTicker = time.NewTicker(syncWorkerTickerPeriod)
 	mc.wg.Add(1)
 	go mc.syncWorker(ctx)
 }
@@ -338,6 +376,20 @@ func (mc *ModelCatalog) syncModelParameters(ctx context.Context) error {
 		if err := mc.configStore.UpdateConfig(ctx, config); err != nil {
 			mc.logger.Warn("model-parameters-sync: failed to update last model parameters sync time: %v", err)
 		}
+	}
+
+	// Populate the in-memory model params cache for provider-level lookups
+	modelParamsEntries := make(map[string]providerUtils.ModelParams, len(paramsData))
+	for model, rawData := range paramsData {
+		var p struct {
+			MaxOutputTokens *int `json:"max_output_tokens"`
+		}
+		if err := json.Unmarshal(rawData, &p); err == nil && p.MaxOutputTokens != nil {
+			modelParamsEntries[model] = providerUtils.ModelParams{MaxOutputTokens: p.MaxOutputTokens}
+		}
+	}
+	if len(modelParamsEntries) > 0 {
+		providerUtils.BulkSetModelParams(modelParamsEntries)
 	}
 
 	mc.logger.Info("model-parameters-sync: successfully synced %d model parameters records", len(paramsData))

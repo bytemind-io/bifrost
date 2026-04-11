@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/fasthttp/router"
 	bifrost "github.com/maximhq/bifrost/core"
@@ -308,10 +307,14 @@ func (h *ConfigHandler) updateConfig(ctx *fasthttp.RequestCtx) {
 		updatedConfig.InitialPoolSize = payload.ClientConfig.InitialPoolSize
 	}
 
-	if payload.ClientConfig.EnableLogging != currentConfig.EnableLogging {
-		restartReasons = append(restartReasons, "Logging enabled")
+	if payload.ClientConfig.EnableLogging != nil {
+		payloadLogging := *payload.ClientConfig.EnableLogging
+		currentLogging := currentConfig.EnableLogging == nil || *currentConfig.EnableLogging
+		if payloadLogging != currentLogging {
+			restartReasons = append(restartReasons, "Logging changed")
+		}
+		updatedConfig.EnableLogging = payload.ClientConfig.EnableLogging
 	}
-	updatedConfig.EnableLogging = payload.ClientConfig.EnableLogging
 
 	if payload.ClientConfig.DisableContentLogging != currentConfig.DisableContentLogging {
 		restartReasons = append(restartReasons, "Content logging")
@@ -372,6 +375,9 @@ func (h *ConfigHandler) updateConfig(ctx *fasthttp.RequestCtx) {
 	// Handle LoggingHeaders changes (no restart needed - logging plugin reads via pointer)
 	updatedConfig.LoggingHeaders = payload.ClientConfig.LoggingHeaders
 
+	// Handle WhitelistedRoutes changes (updated dynamically via AuthMiddleware)
+	updatedConfig.WhitelistedRoutes = payload.ClientConfig.WhitelistedRoutes
+
 	// Toggle whether deleted virtual keys should appear in logs filter data.
 	updatedConfig.HideDeletedVirtualKeysInFilters = payload.ClientConfig.HideDeletedVirtualKeysInFilters
 
@@ -402,7 +408,7 @@ func (h *ConfigHandler) updateConfig(ctx *fasthttp.RequestCtx) {
 	// Update the store with the new config
 	h.store.ClientConfig = updatedConfig
 
-	if err := h.store.ConfigStore.UpdateClientConfig(ctx, &updatedConfig); err != nil {
+	if err := h.store.ConfigStore.UpdateClientConfig(ctx, updatedConfig); err != nil {
 		logger.Warn("failed to save configuration: %v", err)
 		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("failed to save configuration: %v", err))
 		return
@@ -463,16 +469,16 @@ func (h *ConfigHandler) updateConfig(ctx *fasthttp.RequestCtx) {
 	}
 	// Reload config if required
 	if shouldReloadFrameworkConfig {
-		var syncDuration time.Duration
+		var syncSeconds int64
 		if frameworkConfig.PricingSyncInterval != nil {
-			syncDuration = time.Duration(*frameworkConfig.PricingSyncInterval) * time.Second
+			syncSeconds = *frameworkConfig.PricingSyncInterval
 		} else {
-			syncDuration = modelcatalog.DefaultPricingSyncInterval
+			syncSeconds = int64(modelcatalog.DefaultPricingSyncInterval.Seconds())
 		}
 		h.store.FrameworkConfig = &framework.FrameworkConfig{
 			Pricing: &modelcatalog.Config{
 				PricingURL:          frameworkConfig.PricingURL,
-				PricingSyncInterval: &syncDuration,
+				PricingSyncInterval: &syncSeconds,
 			},
 		}
 		// Saving framework config
@@ -790,9 +796,11 @@ func headerFilterConfigEqual(a, b *configstoreTables.GlobalHeaderFilterConfig) b
 	return slices.Equal(a.Allowlist, b.Allowlist) && slices.Equal(a.Denylist, b.Denylist)
 }
 
-// validateHeaderFilterConfig validates that no security headers are in the allowlist or denylist
+// validateHeaderFilterConfig validates that no exact security header names are in the allowlist or denylist
 // and that wildcard patterns use valid syntax (only trailing * is supported).
-// Returns an error if any security headers are found or patterns are invalid.
+// Wildcard patterns that would match security headers are allowed because security headers
+// are unconditionally stripped at runtime regardless of configuration.
+// Returns an error if any exact security headers are found or patterns are invalid.
 func validateHeaderFilterConfig(config *configstoreTables.GlobalHeaderFilterConfig) error {
 	if config == nil {
 		return nil
@@ -826,15 +834,12 @@ func validateHeaderFilterConfig(config *configstoreTables.GlobalHeaderFilterConf
 
 	var foundSecurityHeaders []string
 
-	// Check allowlist for security headers (including wildcard patterns)
+	// Check allowlist for exact security header names.
+	// Wildcard patterns are allowed — security headers are always stripped at runtime
+	// unconditionally in ctx.go, regardless of allowlist/denylist configuration.
 	for _, header := range config.Allowlist {
 		headerLower := strings.ToLower(strings.TrimSpace(header))
 		if strings.Contains(headerLower, "*") {
-			for _, secHeader := range securityHeaders {
-				if lib.HeaderMatchesPattern(headerLower, secHeader) && !slices.Contains(foundSecurityHeaders, secHeader) {
-					foundSecurityHeaders = append(foundSecurityHeaders, secHeader)
-				}
-			}
 			continue
 		}
 		if slices.Contains(securityHeaders, headerLower) {
@@ -842,15 +847,10 @@ func validateHeaderFilterConfig(config *configstoreTables.GlobalHeaderFilterConf
 		}
 	}
 
-	// Check denylist for security headers (including wildcard patterns)
+	// Check denylist for exact security header names.
 	for _, header := range config.Denylist {
 		headerLower := strings.ToLower(strings.TrimSpace(header))
 		if strings.Contains(headerLower, "*") {
-			for _, secHeader := range securityHeaders {
-				if lib.HeaderMatchesPattern(headerLower, secHeader) && !slices.Contains(foundSecurityHeaders, secHeader) {
-					foundSecurityHeaders = append(foundSecurityHeaders, secHeader)
-				}
-			}
 			continue
 		}
 		if slices.Contains(securityHeaders, headerLower) && !slices.Contains(foundSecurityHeaders, headerLower) {

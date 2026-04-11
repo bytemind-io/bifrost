@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	mistralprovider "github.com/maximhq/bifrost/core/providers/mistral"
 	schemas "github.com/maximhq/bifrost/core/schemas"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -399,6 +400,8 @@ func TestIsRateLimitError_AllPatterns(t *testing.T) {
 		"api rate limit",
 		"usage limit",
 		"concurrent requests limit",
+		"burst_rate",
+		"rate increased",
 	}
 
 	for _, pattern := range patterns {
@@ -481,6 +484,20 @@ func TestIsRateLimitError_EdgeCases(t *testing.T) {
 			t.Error("Message with unicode should still detect rate limit pattern")
 		}
 	})
+
+	t.Run("DashScopeErrorCode", func(t *testing.T) {
+		// DashScope returns "limit_burst_rate" as the error code
+		if !IsRateLimitErrorMessage("limit_burst_rate") {
+			t.Error("DashScope error code 'limit_burst_rate' should be detected as rate limit error")
+		}
+	})
+
+	t.Run("DashScopeErrorMessage", func(t *testing.T) {
+		// DashScope returns this as the error message
+		if !IsRateLimitErrorMessage("Request rate increased too quickly, please slow down and try again") {
+			t.Error("DashScope error message should be detected as rate limit error")
+		}
+	})
 }
 
 // Test retry logging and attempt counting
@@ -533,6 +550,63 @@ func TestExecuteRequestWithRetries_LoggingAndCounting(t *testing.T) {
 
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
+	}
+}
+
+func TestHandleProviderRequest_OCROperationNotAllowed(t *testing.T) {
+	providerConfig := &schemas.ProviderConfig{
+		NetworkConfig: schemas.NetworkConfig{
+			BaseURL:                        "http://127.0.0.1:1",
+			DefaultRequestTimeoutInSeconds: 1,
+		},
+		CustomProviderConfig: &schemas.CustomProviderConfig{
+			CustomProviderKey: "custom-mistral",
+			BaseProviderType:  schemas.Mistral,
+			AllowedRequests:   &schemas.AllowedRequests{},
+		},
+	}
+	provider := mistralprovider.NewMistralProvider(providerConfig, NewDefaultLogger(schemas.LogLevelError))
+	if provider.GetProviderKey() != schemas.ModelProvider("custom-mistral") {
+		t.Fatalf("expected custom provider key, got %q", provider.GetProviderKey())
+	}
+	bifrost := &Bifrost{}
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+
+	request := &ChannelMessage{
+		Context: ctx,
+		BifrostRequest: schemas.BifrostRequest{
+			RequestType: schemas.OCRRequest,
+			OCRRequest: &schemas.BifrostOCRRequest{
+				Model: "custom-mistral/mistral-ocr-latest",
+				Document: schemas.OCRDocument{
+					Type:        schemas.OCRDocumentTypeDocumentURL,
+					DocumentURL: Ptr("https://example.com/doc.pdf"),
+				},
+			},
+		},
+	}
+
+	response, err := bifrost.handleProviderRequest(provider, providerConfig, request, schemas.Key{}, nil)
+	if response != nil {
+		t.Fatalf("expected nil response, got %#v", response)
+	}
+	if err == nil {
+		t.Fatal("expected unsupported operation error, got nil")
+	}
+	if err.Error == nil {
+		t.Fatal("expected detailed error, got nil")
+	}
+	if err.Error.Code == nil || *err.Error.Code != "unsupported_operation" {
+		t.Fatalf("expected unsupported_operation code, got %#v", err.Error.Code)
+	}
+	if err.ExtraFields.Provider != schemas.ModelProvider("custom-mistral") {
+		t.Fatalf("expected custom provider name, got %q", err.ExtraFields.Provider)
+	}
+	if err.ExtraFields.RequestType != schemas.OCRRequest {
+		t.Fatalf("expected OCR request type, got %q", err.ExtraFields.RequestType)
+	}
+	if err.ExtraFields.ModelRequested != "custom-mistral/mistral-ocr-latest" {
+		t.Fatalf("expected model to be preserved, got %q", err.ExtraFields.ModelRequested)
 	}
 }
 
@@ -845,6 +919,62 @@ func TestSelectKeyFromProviderForModel_NoStickinessWithoutSessionID(t *testing.T
 	if _, err := kvStore.Get(buildSessionKey(schemas.OpenAI, "", "gpt-4")); err == nil {
 		t.Error("kvstore should not have a sticky entry for an empty session id")
 	}
+}
+
+func TestSelectKeyFromProviderForModel_BlacklistedModels(t *testing.T) {
+	account := NewMockAccount()
+	account.AddProvider(schemas.OpenAI, 5, 1000)
+
+	ctx := context.Background()
+	bifrost, err := Init(ctx, schemas.BifrostConfig{
+		Account: account,
+		Logger:  NewDefaultLogger(schemas.LogLevelError),
+	})
+	if err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	bfCtx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+
+	t.Run("all keys blacklist model", func(t *testing.T) {
+		account.SetKeysForProvider(schemas.OpenAI, []schemas.Key{
+			{ID: "k1", Name: "K1", Value: *schemas.NewEnvVar("sk-1"), Weight: 1, BlacklistedModels: []string{"gpt-4"}},
+		})
+		_, err := bifrost.selectKeyFromProviderForModel(bfCtx, schemas.ChatCompletionRequest, schemas.OpenAI, "gpt-4", schemas.OpenAI)
+		if err == nil {
+			t.Fatal("expected error when model is only blacklisted")
+		}
+		if !strings.Contains(err.Error(), "no keys found that support model") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("blacklist wins over models allow list", func(t *testing.T) {
+		account.SetKeysForProvider(schemas.OpenAI, []schemas.Key{
+			{
+				ID: "k1", Name: "K1", Value: *schemas.NewEnvVar("sk-1"), Weight: 1,
+				Models:            []string{"gpt-4"},
+				BlacklistedModels: []string{"gpt-4"},
+			},
+		})
+		_, err := bifrost.selectKeyFromProviderForModel(bfCtx, schemas.ChatCompletionRequest, schemas.OpenAI, "gpt-4", schemas.OpenAI)
+		if err == nil {
+			t.Fatal("expected error when model is both allowed and blacklisted")
+		}
+	})
+
+	t.Run("second key used when first blacklists", func(t *testing.T) {
+		account.SetKeysForProvider(schemas.OpenAI, []schemas.Key{
+			{ID: "k1", Name: "K1", Value: *schemas.NewEnvVar("sk-1"), Weight: 1, BlacklistedModels: []string{"gpt-4"}},
+			{ID: "k2", Name: "K2", Value: *schemas.NewEnvVar("sk-2"), Weight: 1},
+		})
+		key, err := bifrost.selectKeyFromProviderForModel(bfCtx, schemas.ChatCompletionRequest, schemas.OpenAI, "gpt-4", schemas.OpenAI)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if key.ID != "k2" {
+			t.Fatalf("expected k2, got %s", key.ID)
+		}
+	})
 }
 
 // Test UpdateProvider functionality
@@ -1170,4 +1300,3 @@ func TestUpdateProvider_ProviderSliceIntegrity(t *testing.T) {
 		}
 	})
 }
-

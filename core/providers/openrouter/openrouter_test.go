@@ -28,7 +28,7 @@ func TestOpenRouter(t *testing.T) {
 		ChatModel:      "openai/gpt-4.1",
 		VisionModel:    "openai/gpt-4o",
 		TextModel:      "google/gemini-2.5-flash",
-		EmbeddingModel: "",
+		EmbeddingModel: "qwen/qwen3-embedding-4b",
 		ReasoningModel: "openai/gpt-oss-120b",
 		Scenarios: llmtests.TestScenarios{
 			TextCompletion:        true,
@@ -37,7 +37,8 @@ func TestOpenRouter(t *testing.T) {
 			MultiTurnConversation: true,
 			ToolCalls:             true,
 			ToolCallsStreaming:    false, // OpenRouter's responses API is in Beta
-			MultipleToolCalls:     true,
+			MultipleToolCalls:          true,
+			MultipleToolCallsStreaming: true,
 			End2EndToolCalling:    true,
 			AutomaticFunctionCall: true,
 			ImageURL:              false, // OpenRouter's responses API is in Beta
@@ -49,6 +50,7 @@ func TestOpenRouter(t *testing.T) {
 			Reasoning:             true,
 			ListModels:            true,
 			StructuredOutputs:     true, // Structured outputs with nullable enum support
+			Embedding:             true,
 		},
 	}
 

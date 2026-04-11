@@ -361,6 +361,7 @@ func (provider *ReplicateProvider) listDeploymentsByKey(ctx *schemas.BifrostCont
 		deploymentsResponse,
 		providerName,
 		key.Models,
+		key.BlacklistedModels,
 		request.Unfiltered,
 	)
 
@@ -677,7 +678,7 @@ func (provider *ReplicateProvider) TextCompletionStream(ctx *schemas.BifrostCont
 					// Set raw response if enabled (per-chunk event as JSON string)
 					if providerUtils.ShouldSendBackRawResponse(ctx, provider.sendBackRawResponse) {
 						rawEvent := ReplicateSSEEvent{Event: eventType, Data: eventData}
-						if eventJSON, err := sonic.Marshal(rawEvent); err == nil {
+						if eventJSON, err := providerUtils.MarshalSorted(rawEvent); err == nil {
 							response.ExtraFields.RawResponse = string(eventJSON)
 						}
 					}
@@ -1059,7 +1060,7 @@ func (provider *ReplicateProvider) ChatCompletionStream(ctx *schemas.BifrostCont
 					// Set raw response if enabled (per-chunk event as JSON string)
 					if providerUtils.ShouldSendBackRawResponse(ctx, provider.sendBackRawResponse) {
 						rawEvent := ReplicateSSEEvent{Event: eventType, Data: eventData}
-						if eventJSON, err := sonic.Marshal(rawEvent); err == nil {
+						if eventJSON, err := providerUtils.MarshalSorted(rawEvent); err == nil {
 							response.ExtraFields.RawResponse = string(eventJSON)
 						}
 					}
@@ -1280,15 +1281,11 @@ func (provider *ReplicateProvider) ResponsesStream(ctx *schemas.BifrostContext, 
 		return nil, bifrostErr
 	}
 
-	// Enable streaming
-	var replicateReq ReplicatePredictionRequest
-	if err := sonic.Unmarshal(jsonData, &replicateReq); err == nil {
-		replicateReq.Stream = schemas.Ptr(true)
-		var streamErr error
-		jsonData, streamErr = sonic.Marshal(replicateReq)
-		if streamErr != nil {
-			return nil, providerUtils.NewBifrostOperationError("failed to marshal request", streamErr, provider.GetProviderKey())
-		}
+	// Enable streaming (using sjson to set field directly, preserving key order)
+	if updatedData, err := providerUtils.SetJSONField(jsonData, "stream", true); err != nil {
+		return nil, providerUtils.NewBifrostOperationError("failed to set stream field", err, provider.GetProviderKey())
+	} else {
+		jsonData = updatedData
 	}
 
 	// Build prediction URL
@@ -1363,7 +1360,7 @@ func (provider *ReplicateProvider) ResponsesStream(ctx *schemas.BifrostContext, 
 			}, jsonData, nil, provider.sendBackRawRequest, provider.sendBackRawResponse)
 		}
 		if errors.Is(streamErr, fasthttp.ErrTimeout) || errors.Is(streamErr, context.DeadlineExceeded) {
-			return nil, providerUtils.EnrichError(ctx, providerUtils.NewBifrostOperationError(schemas.ErrProviderRequestTimedOut, streamErr, provider.GetProviderKey()), jsonData, nil, provider.sendBackRawRequest, provider.sendBackRawResponse)
+			return nil, providerUtils.EnrichError(ctx, providerUtils.NewBifrostTimeoutError(schemas.ErrProviderRequestTimedOut, streamErr, provider.GetProviderKey()), jsonData, nil, provider.sendBackRawRequest, provider.sendBackRawResponse)
 		}
 		return nil, providerUtils.EnrichError(ctx, providerUtils.NewBifrostOperationError(schemas.ErrProviderDoRequest, streamErr, provider.GetProviderKey()), jsonData, nil, provider.sendBackRawRequest, provider.sendBackRawResponse)
 	}
@@ -1805,6 +1802,11 @@ func (provider *ReplicateProvider) Speech(ctx *schemas.BifrostContext, key schem
 // Rerank is not supported by the Replicate provider.
 func (provider *ReplicateProvider) Rerank(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostRerankRequest) (*schemas.BifrostRerankResponse, *schemas.BifrostError) {
 	return nil, providerUtils.NewUnsupportedOperationError(schemas.RerankRequest, provider.GetProviderKey())
+}
+
+// OCR is not supported by the Replicate provider.
+func (provider *ReplicateProvider) OCR(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostOCRRequest) (*schemas.BifrostOCRResponse, *schemas.BifrostError) {
+	return nil, providerUtils.NewUnsupportedOperationError(schemas.OCRRequest, provider.GetProviderKey())
 }
 
 // SpeechStream is not supported by the replicate provider.
@@ -3039,7 +3041,7 @@ func (provider *ReplicateProvider) FileUpload(ctx *schemas.BifrostContext, key s
 	if request.ExtraParams != nil {
 		if metadata, ok := request.ExtraParams["metadata"].(map[string]interface{}); ok {
 			if len(metadata) > 0 {
-				metadataJSON, err := sonic.Marshal(metadata)
+				metadataJSON, err := providerUtils.MarshalSorted(metadata)
 				if err != nil {
 					return nil, providerUtils.NewBifrostOperationError("failed to marshal metadata", err, providerName)
 				}
