@@ -40,8 +40,23 @@ func NewUserStore(db *gorm.DB) (*UserStore, error) {
 	return &UserStore{db: db}, nil
 }
 
+// ValidRoles is the set of valid role values.
+var ValidRoles = map[Role]bool{
+	RoleAdmin:       true,
+	RoleTeamManager: true,
+	RoleUser:        true,
+	RoleViewer:      true,
+}
+
 // CreateUser creates a new user with hashed password.
 func (s *UserStore) CreateUser(ctx context.Context, email, name, password string, role Role, teamID *string) (*TableUser, error) {
+	if password == "" {
+		return nil, fmt.Errorf("password cannot be empty")
+	}
+	if !ValidRoles[role] {
+		return nil, fmt.Errorf("invalid role: %s", role)
+	}
+
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
@@ -126,8 +141,12 @@ func (s *UserStore) UpdatePassword(ctx context.Context, id, newPassword string) 
 	}).Error
 }
 
-// DeleteUser deletes a user.
+// DeleteUser deletes a user and cleans up their sessions.
 func (s *UserStore) DeleteUser(ctx context.Context, id string) error {
+	// Clean up session mappings first
+	if err := s.DeleteUserSessionsByUserID(ctx, id); err != nil {
+		return err
+	}
 	return s.db.WithContext(ctx).Where("id = ?", id).Delete(&TableUser{}).Error
 }
 
