@@ -230,9 +230,12 @@ func (h *EnterpriseHandler) RegisterRoutes(r *router.Router, middlewares ...sche
 	// Current user permissions (for frontend RBAC context)
 	r.GET("/api/enterprise/permissions", lib.ChainMiddlewares(h.getMyPermissions, middlewares...))
 
-	// Audit logs
+	// Audit logs (both paths for backward compat + official docs)
 	r.GET("/api/enterprise/audit-logs", lib.ChainMiddlewares(h.queryAuditLogs, middlewares...))
-
+	r.GET("/api/audit-logs", lib.ChainMiddlewares(h.queryAuditLogs, middlewares...))
+	r.DELETE("/api/enterprise/audit-logs", lib.ChainMiddlewares(h.clearAuditLogs, middlewares...))
+	r.POST("/api/audit-logs/query", lib.ChainMiddlewares(h.advancedQueryAuditLogs, middlewares...))
+	r.GET("/api/enterprise/audit-logs/stats", lib.ChainMiddlewares(h.auditLogStats, middlewares...))
 }
 
 // GetUserStore returns the user store.
@@ -807,20 +810,23 @@ func (h *EnterpriseHandler) getMyPermissions(ctx *fasthttp.RequestCtx) {
 
 func (h *EnterpriseHandler) queryAuditLogs(ctx *fasthttp.RequestCtx) {
 	q := enterprise.AuditLogQuery{
-		UserID:   string(ctx.QueryArgs().Peek("user_id")),
-		Action:   string(ctx.QueryArgs().Peek("action")),
-		Resource: string(ctx.QueryArgs().Peek("resource")),
-		Search:   string(ctx.QueryArgs().Peek("search")),
+		EventType: string(ctx.QueryArgs().Peek("event_type")),
+		Action:    string(ctx.QueryArgs().Peek("action")),
+		Status:    string(ctx.QueryArgs().Peek("status")),
+		Severity:  string(ctx.QueryArgs().Peek("severity")),
+		UserID:    string(ctx.QueryArgs().Peek("user_id")),
+		Resource:  string(ctx.QueryArgs().Peek("resource")),
+		Search:    string(ctx.QueryArgs().Peek("search")),
 	}
 	q.Offset, _ = strconv.Atoi(string(ctx.QueryArgs().Peek("offset")))
 	q.Limit, _ = strconv.Atoi(string(ctx.QueryArgs().Peek("limit")))
 
-	if startStr := string(ctx.QueryArgs().Peek("start_at")); startStr != "" {
+	if startStr := string(ctx.QueryArgs().Peek("start_date")); startStr != "" {
 		if t, err := time.Parse(time.RFC3339, startStr); err == nil {
 			q.StartAt = &t
 		}
 	}
-	if endStr := string(ctx.QueryArgs().Peek("end_at")); endStr != "" {
+	if endStr := string(ctx.QueryArgs().Peek("end_date")); endStr != "" {
 		if t, err := time.Parse(time.RFC3339, endStr); err == nil {
 			q.EndAt = &t
 		}
@@ -832,7 +838,95 @@ func (h *EnterpriseHandler) queryAuditLogs(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	SendJSON(ctx, map[string]interface{}{
-		"data":  logs,
-		"total": total,
+		"total_count":    total,
+		"returned_count": len(logs),
+		"audit_logs":     logs,
 	})
+}
+
+func (h *EnterpriseHandler) advancedQueryAuditLogs(ctx *fasthttp.RequestCtx) {
+	var body struct {
+		Filters struct {
+			EventTypes []string `json:"event_types"`
+			DateRange  struct {
+				Start string `json:"start"`
+				End   string `json:"end"`
+			} `json:"date_range"`
+			Actors struct {
+				UserIDs []string `json:"user_ids"`
+			} `json:"actors"`
+			Status   []string `json:"status"`
+			Severity []string `json:"severity"`
+		} `json:"filters"`
+		Limit          int  `json:"limit"`
+		IncludeDetails bool `json:"include_details"`
+	}
+	if err := json.Unmarshal(ctx.PostBody(), &body); err != nil {
+		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
+		return
+	}
+
+	q := enterprise.AuditLogQuery{
+		Limit: body.Limit,
+	}
+	if q.Limit == 0 {
+		q.Limit = 100
+	}
+	// Use first values from arrays for basic filtering
+	if len(body.Filters.EventTypes) > 0 {
+		q.EventType = body.Filters.EventTypes[0]
+	}
+	if len(body.Filters.Status) > 0 {
+		q.Status = body.Filters.Status[0]
+	}
+	if len(body.Filters.Severity) > 0 {
+		q.Severity = body.Filters.Severity[0]
+	}
+	if len(body.Filters.Actors.UserIDs) > 0 {
+		q.UserID = body.Filters.Actors.UserIDs[0]
+	}
+	if body.Filters.DateRange.Start != "" {
+		if t, err := time.Parse(time.RFC3339, body.Filters.DateRange.Start); err == nil {
+			q.StartAt = &t
+		}
+	}
+	if body.Filters.DateRange.End != "" {
+		if t, err := time.Parse(time.RFC3339, body.Filters.DateRange.End); err == nil {
+			q.EndAt = &t
+		}
+	}
+
+	logs, total, err := h.auditStore.Query(ctx, q)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to query: %v", err))
+		return
+	}
+	SendJSON(ctx, map[string]interface{}{
+		"total_count":    total,
+		"returned_count": len(logs),
+		"audit_logs":     logs,
+	})
+}
+
+func (h *EnterpriseHandler) auditLogStats(ctx *fasthttp.RequestCtx) {
+	stats, err := h.auditStore.Stats(ctx)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to get stats: %v", err))
+		return
+	}
+	SendJSON(ctx, stats)
+}
+
+func (h *EnterpriseHandler) clearAuditLogs(ctx *fasthttp.RequestCtx) {
+	_, _, role, _ := enterprise.ExtractUserFromContext(ctx)
+	if !strings.EqualFold(role, "Admin") {
+		SendError(ctx, fasthttp.StatusForbidden, "Only admin can clear audit logs")
+		return
+	}
+	if err := h.auditStore.ClearAll(ctx); err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to clear audit logs: %v", err))
+		return
+	}
+	h.audit(ctx, "clear_audit_logs", "audit_logs", "", "")
+	SendJSON(ctx, map[string]string{"message": "Audit logs cleared"})
 }

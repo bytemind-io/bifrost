@@ -4,6 +4,7 @@ package enterprise
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -245,8 +246,8 @@ func (s *RoleStore) IsAllowed(roleNameOrID string, resource Resource, operation 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Resolve by name first, then by ID
-	role, ok := s.byName[roleNameOrID]
+	// Resolve by name (case-insensitive) first, then by ID
+	role, ok := s.byName[strings.ToLower(roleNameOrID)]
 	if !ok {
 		role, ok = s.roles[roleNameOrID]
 	}
@@ -314,7 +315,7 @@ func (s *RoleStore) GetPermissionsMap(roleNameOrID string) map[string]map[string
 func (s *RoleStore) GetRoleByName(name string) *TableRole {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.byName[name]
+	return s.byName[strings.ToLower(name)]
 }
 
 // ---------- CRUD ----------

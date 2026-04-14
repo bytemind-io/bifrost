@@ -137,6 +137,25 @@ func (s *AuditStore) Close() {
 	<-s.done
 }
 
+// Record creates an audit log entry synchronously (for tests and critical paths).
+func (s *AuditStore) Record(ctx context.Context, userID, userEmail, action, resource, resourceID, details, ip string) error {
+	entry := &TableAuditLog{
+		ID:         uuid.New().String(),
+		EventType:  EventTypeConfigurationChange,
+		Action:     action,
+		Status:     StatusSuccess,
+		Severity:   SeverityLow,
+		UserID:     userID,
+		UserEmail:  userEmail,
+		IP:         ip,
+		Resource:   resource,
+		ResourceID: resourceID,
+		Details:    details,
+		CreatedAt:  time.Now(),
+	}
+	return s.db.WithContext(ctx).Create(entry).Error
+}
+
 // ClearAll deletes all audit logs.
 func (s *AuditStore) ClearAll(ctx context.Context) error {
 	return s.db.WithContext(ctx).Where("1 = 1").Delete(&TableAuditLog{}).Error
@@ -213,4 +232,58 @@ func (s *AuditStore) Query(ctx context.Context, q AuditLogQuery) ([]TableAuditLo
 		return nil, 0, err
 	}
 	return logs, total, nil
+}
+
+// AuditStats holds aggregate statistics for audit logs.
+type AuditStats struct {
+	Total          int64            `json:"total"`
+	ByEventType    map[string]int64 `json:"by_event_type"`
+	BySeverity     map[string]int64 `json:"by_severity"`
+	ByStatus       map[string]int64 `json:"by_status"`
+	FailedLogins   int64            `json:"failed_logins"`
+	RecentCount24h int64            `json:"recent_count_24h"`
+}
+
+// Stats returns aggregate audit log statistics.
+func (s *AuditStore) Stats(ctx context.Context) (*AuditStats, error) {
+	stats := &AuditStats{
+		ByEventType: make(map[string]int64),
+		BySeverity:  make(map[string]int64),
+		ByStatus:    make(map[string]int64),
+	}
+
+	s.db.WithContext(ctx).Model(&TableAuditLog{}).Count(&stats.Total)
+
+	type groupCount struct {
+		Key   string
+		Count int64
+	}
+
+	var byType []groupCount
+	s.db.WithContext(ctx).Model(&TableAuditLog{}).Select("event_type as key, count(*) as count").Group("event_type").Scan(&byType)
+	for _, g := range byType {
+		stats.ByEventType[g.Key] = g.Count
+	}
+
+	var bySev []groupCount
+	s.db.WithContext(ctx).Model(&TableAuditLog{}).Select("severity as key, count(*) as count").Group("severity").Scan(&bySev)
+	for _, g := range bySev {
+		stats.BySeverity[g.Key] = g.Count
+	}
+
+	var byStatus []groupCount
+	s.db.WithContext(ctx).Model(&TableAuditLog{}).Select("status as key, count(*) as count").Group("status").Scan(&byStatus)
+	for _, g := range byStatus {
+		stats.ByStatus[g.Key] = g.Count
+	}
+
+	s.db.WithContext(ctx).Model(&TableAuditLog{}).
+		Where("event_type = ? AND status = ?", EventTypeAuthentication, StatusFailed).
+		Count(&stats.FailedLogins)
+
+	s.db.WithContext(ctx).Model(&TableAuditLog{}).
+		Where("created_at >= ?", time.Now().Add(-24*time.Hour)).
+		Count(&stats.RecentCount24h)
+
+	return stats, nil
 }

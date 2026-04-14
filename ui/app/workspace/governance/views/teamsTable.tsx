@@ -66,7 +66,7 @@ function TeamMembersDialog({ teamId, teamName, open, onOpenChange }: { teamId: s
 				method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
 				body: JSON.stringify({ user_id: userId }),
 			});
-			if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.message || d.error || "Failed"); }
+			if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error?.message || d.message || "Failed"); }
 			toast.success("Member added"); setAddDialogOpen(false); setUserId(""); fetchMembers();
 		} catch (err: any) { toast.error(err.message); } finally { setIsSaving(false); }
 	};
