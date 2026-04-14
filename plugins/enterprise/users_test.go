@@ -29,7 +29,7 @@ func TestUserStore_CreateAndGet(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	user, err := store.CreateUser(ctx, "test@example.com", "Test User", "password123", RoleUser, nil)
+	user, err := store.CreateUser(ctx, "test@example.com", "Test User", "password123", "Viewer", nil)
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestUserStore_CreateAndGet(t *testing.T) {
 	if user.Email != "test@example.com" {
 		t.Errorf("expected email test@example.com, got %s", user.Email)
 	}
-	if user.Role != string(RoleUser) {
+	if user.Role != string("Viewer") {
 		t.Errorf("expected role user, got %s", user.Role)
 	}
 
@@ -70,7 +70,7 @@ func TestUserStore_ValidatePassword(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	user, _ := store.CreateUser(ctx, "test@example.com", "Test", "mypassword", RoleUser, nil)
+	user, _ := store.CreateUser(ctx, "test@example.com", "Test", "mypassword", "Viewer", nil)
 
 	if !store.ValidatePassword(user, "mypassword") {
 		t.Error("correct password should validate")
@@ -88,13 +88,13 @@ func TestUserStore_ListUsers(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	store.CreateUser(ctx, "alice@example.com", "Alice", "pass", RoleAdmin, nil)
+	store.CreateUser(ctx, "alice@example.com", "Alice", "pass", "Admin", nil)
 	teamID := "team-1"
-	store.CreateUser(ctx, "bob@example.com", "Bob", "pass", RoleUser, &teamID)
-	store.CreateUser(ctx, "charlie@example.com", "Charlie", "pass", RoleUser, &teamID)
+	store.CreateUser(ctx, "bob@example.com", "Bob", "pass", "Viewer", &teamID)
+	store.CreateUser(ctx, "charlie@example.com", "Charlie", "pass", "Viewer", &teamID)
 
 	// List all
-	users, total, err := store.ListUsers(ctx, nil, "", 0, 10)
+	users, total, err := store.ListUsers(ctx, UserListParams{Limit: 10})
 	if err != nil {
 		t.Fatalf("failed to list users: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestUserStore_ListUsers(t *testing.T) {
 	}
 
 	// List by team
-	users, total, err = store.ListUsers(ctx, &teamID, "", 0, 10)
+	users, total, err = store.ListUsers(ctx, UserListParams{TeamID: &teamID, Limit: 10})
 	if err != nil {
 		t.Fatalf("failed to list users by team: %v", err)
 	}
@@ -115,12 +115,31 @@ func TestUserStore_ListUsers(t *testing.T) {
 	}
 
 	// Search
-	users, total, err = store.ListUsers(ctx, nil, "alice", 0, 10)
+	users, total, err = store.ListUsers(ctx, UserListParams{Search: "alice", Limit: 10})
 	if err != nil {
 		t.Fatalf("failed to search users: %v", err)
 	}
 	if total != 1 {
 		t.Errorf("expected 1 user matching 'alice', got %d", total)
+	}
+
+	// Filter by role
+	users, total, err = store.ListUsers(ctx, UserListParams{Role: "Viewer", Limit: 10})
+	if err != nil {
+		t.Fatalf("failed to filter by role: %v", err)
+	}
+	if total != 2 {
+		t.Errorf("expected 2 users with role 'viewer', got %d", total)
+	}
+
+	// Filter by active status
+	active := true
+	users, total, err = store.ListUsers(ctx, UserListParams{IsActive: &active, Limit: 10})
+	if err != nil {
+		t.Fatalf("failed to filter by active: %v", err)
+	}
+	if total != 3 {
+		t.Errorf("expected 3 active users, got %d", total)
 	}
 }
 
@@ -132,11 +151,11 @@ func TestUserStore_UpdateUser(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	user, _ := store.CreateUser(ctx, "test@example.com", "Test", "pass", RoleUser, nil)
+	user, _ := store.CreateUser(ctx, "test@example.com", "Test", "pass", "Viewer", nil)
 
 	updated, err := store.UpdateUser(ctx, user.ID, map[string]interface{}{
 		"name": "Updated Name",
-		"role": string(RoleTeamManager),
+		"role": string("Developer"),
 	})
 	if err != nil {
 		t.Fatalf("failed to update user: %v", err)
@@ -144,7 +163,7 @@ func TestUserStore_UpdateUser(t *testing.T) {
 	if updated.Name != "Updated Name" {
 		t.Errorf("name should be updated, got %s", updated.Name)
 	}
-	if updated.Role != string(RoleTeamManager) {
+	if updated.Role != string("Developer") {
 		t.Errorf("role should be updated, got %s", updated.Role)
 	}
 }
@@ -157,7 +176,7 @@ func TestUserStore_DeleteUser(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	user, _ := store.CreateUser(ctx, "test@example.com", "Test", "pass", RoleUser, nil)
+	user, _ := store.CreateUser(ctx, "test@example.com", "Test", "pass", "Viewer", nil)
 	err = store.DeleteUser(ctx, user.ID)
 	if err != nil {
 		t.Fatalf("failed to delete user: %v", err)
@@ -190,7 +209,7 @@ func TestUserStore_EnsureAdminExists(t *testing.T) {
 	}
 
 	// Should still have only 1 admin
-	users, total, _ := store.ListUsers(ctx, nil, "", 0, 10)
+	users, total, _ := store.ListUsers(ctx, UserListParams{Limit: 10})
 	if total != 1 {
 		t.Errorf("expected 1 user, got %d", total)
 	}
@@ -207,7 +226,7 @@ func TestUserStore_SessionMapping(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	user, _ := store.CreateUser(ctx, "test@example.com", "Test", "pass", RoleUser, nil)
+	user, _ := store.CreateUser(ctx, "test@example.com", "Test", "pass", "Viewer", nil)
 
 	// Create session mapping
 	tokenHash := "abc123hash"

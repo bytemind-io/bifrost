@@ -171,3 +171,25 @@ test.describe('Governance - Customers', () => {
     expect(exists).toBe(false)
   })
 })
+
+test.describe('Governance - Users', () => {
+  test.beforeEach(async ({ governancePage }) => {
+    await governancePage.gotoUsers()
+  })
+
+  test('should keep row action buttons visible without hover', async ({ governancePage }) => {
+    await governancePage.page.getByRole('heading', { name: /Users/i }).waitFor({ state: 'visible', timeout: 10000 })
+
+    const rowCount = await governancePage.usersTable.locator('tbody tr').count()
+    test.skip(rowCount === 0 || (rowCount === 1 && await governancePage.usersTable.getByText(/No matching users found/i).isVisible().catch(() => false)), 'Users table has no rows to validate.')
+
+    const firstRow = governancePage.usersTable.locator('tbody tr').first()
+    const emailText = (await firstRow.locator('td').nth(1).textContent())?.trim()
+    expect(emailText).toBeTruthy()
+
+    if (!emailText) return
+
+    await expect(governancePage.getUserRow(emailText)).toBeVisible()
+    await expect(governancePage.getUserEditButton(emailText).or(governancePage.getUserDeleteButton(emailText)).first()).toBeVisible()
+  })
+})

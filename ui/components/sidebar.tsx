@@ -799,6 +799,18 @@ export default function AppSidebar() {
 			const info = getUserInfo();
 			setUserInfo(info);
 		}
+		// Fetch enterprise user info from API
+		fetch("/api/enterprise/me", { credentials: "include" })
+			.then((res) => (res.ok ? res.json() : null))
+			.then((data) => {
+				if (data?.user) {
+					setUserInfo({ name: data.user.name, email: data.user.email });
+				} else if (data?.role) {
+					// Legacy admin session
+					setUserInfo({ name: "Admin", email: "" });
+				}
+			})
+			.catch(() => {});
 	}, []);
 
 	const showNewReleaseBanner = useMemo(() => {
@@ -1039,6 +1051,8 @@ export default function AppSidebar() {
 	const handleLogout = async () => {
 		try {
 			setUserPopoverOpen(false);
+			// Call enterprise logout to clean up user-session mapping
+			await fetch("/api/enterprise/logout", { method: "POST", credentials: "include" }).catch(() => {});
 			await logout().unwrap();
 			router.push("/login");
 		} catch (error) {
@@ -1158,7 +1172,7 @@ export default function AppSidebar() {
 								</a>
 							))}
 							<ThemeToggle />
-							{IS_ENTERPRISE && userInfo && (userInfo.name || userInfo.email) ? (
+							{userInfo && (userInfo.name || userInfo.email) ? (
 								<Popover open={userPopoverOpen} onOpenChange={setUserPopoverOpen}>
 									<PopoverTrigger asChild>
 										<button
@@ -1172,7 +1186,8 @@ export default function AppSidebar() {
 									<PopoverContent side="top" align="start" className="w-56 p-0">
 										<div className="flex flex-col">
 											<div className="px-4 py-3">
-												<p className="text-sm font-medium">{userInfo.name || userInfo.email || "User"}</p>
+												<p className="text-sm font-medium">{userInfo.name || "User"}</p>
+												{userInfo.email && <p className="text-muted-foreground text-xs">{userInfo.email}</p>}
 											</div>
 											<Separator />
 											<button
@@ -1186,7 +1201,7 @@ export default function AppSidebar() {
 										</div>
 									</PopoverContent>
 								</Popover>
-							) : isAuthEnabled && !IS_ENTERPRISE ? (
+							) : isAuthEnabled ? (
 								<div>
 									<button
 										className="hover:text-primary text-muted-foreground flex cursor-pointer items-center space-x-3 p-0.5"

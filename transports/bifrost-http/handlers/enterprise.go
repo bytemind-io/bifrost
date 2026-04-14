@@ -23,21 +23,67 @@ import (
 type EnterpriseHandler struct {
 	userStore   *enterprise.UserStore
 	auditStore  *enterprise.AuditStore
+	roleStore   *enterprise.RoleStore
 	configStore configstore.ConfigStore
 }
 
 // NewEnterpriseHandler creates a new enterprise handler instance.
-func NewEnterpriseHandler(userStore *enterprise.UserStore, auditStore *enterprise.AuditStore, configStore configstore.ConfigStore) *EnterpriseHandler {
+func NewEnterpriseHandler(
+	userStore *enterprise.UserStore,
+	auditStore *enterprise.AuditStore,
+	roleStore *enterprise.RoleStore,
+	configStore configstore.ConfigStore,
+) *EnterpriseHandler {
 	return &EnterpriseHandler{
 		userStore:   userStore,
 		auditStore:  auditStore,
+		roleStore:   roleStore,
 		configStore: configStore,
 	}
 }
 
+// GetRoleStore returns the role store (used by governance handler for data filtering).
+func (h *EnterpriseHandler) GetRoleStore() *enterprise.RoleStore {
+	return h.roleStore
+}
+
+// audit emits a configuration_change audit event (most common type).
+func (h *EnterpriseHandler) audit(ctx *fasthttp.RequestCtx, action, resource, resourceID, details string) {
+	userID, userEmail, _, _ := enterprise.ExtractUserFromContext(ctx)
+	if userEmail == "" {
+		userEmail = "admin"
+	}
+	h.auditStore.Emit(enterprise.AuditEvent{
+		EventType:  enterprise.EventTypeConfigurationChange,
+		Action:     action,
+		Status:     enterprise.StatusSuccess,
+		Severity:   enterprise.SeverityLow,
+		UserID:     userID,
+		UserEmail:  userEmail,
+		IP:         ctx.RemoteAddr().String(),
+		Resource:   resource,
+		ResourceID: resourceID,
+		Details:    details,
+	})
+}
+
+// auditAuth emits an authentication audit event.
+func (h *EnterpriseHandler) auditAuth(ctx *fasthttp.RequestCtx, action, status, severity, userID, email, details string) {
+	h.auditStore.Emit(enterprise.AuditEvent{
+		EventType: enterprise.EventTypeAuthentication,
+		Action:    action,
+		Status:    status,
+		Severity:  severity,
+		UserID:    userID,
+		UserEmail: email,
+		IP:        ctx.RemoteAddr().String(),
+		Details:   details,
+	})
+}
+
 // RBACMiddleware returns a middleware that enforces role-based access control.
-// It resolves the enterprise user from the session token hash, injects user info
-// into the request context, and checks route permissions.
+// It resolves the enterprise user from the session token hash or API key,
+// injects user info into the request context, and checks route permissions.
 func (h *EnterpriseHandler) RBACMiddleware() schemas.BifrostHTTPMiddleware {
 	return func(next fasthttp.RequestHandler) fasthttp.RequestHandler {
 		return func(ctx *fasthttp.RequestCtx) {
@@ -65,7 +111,7 @@ func (h *EnterpriseHandler) RBACMiddleware() schemas.BifrostHTTPMiddleware {
 			if err != nil {
 				// No enterprise user mapping — this is a legacy admin session
 				// (logged in via config-based admin credentials). Grant admin role.
-				ctx.SetUserValue(enterprise.CtxKeyUserRole, string(enterprise.RoleAdmin))
+				ctx.SetUserValue(enterprise.CtxKeyUserRole, "Admin")
 			} else {
 				// Enterprise user found — inject user info into context
 				ctx.SetUserValue(enterprise.CtxKeyUserID, user.ID)
@@ -76,12 +122,12 @@ func (h *EnterpriseHandler) RBACMiddleware() schemas.BifrostHTTPMiddleware {
 
 			// Check route permission
 			method := string(ctx.Method())
-			role := enterprise.RoleAdmin
+			roleName := "Admin"
 			if roleStr, ok := ctx.UserValue(enterprise.CtxKeyUserRole).(string); ok {
-				role = enterprise.Role(roleStr)
+				roleName = roleStr
 			}
 
-			if !enterprise.CheckRoutePermission(role, method, path) {
+			if !enterprise.CheckRoutePermission(h.roleStore, roleName, method, path) {
 				SendError(ctx, fasthttp.StatusForbidden, "Insufficient permissions")
 				return
 			}
@@ -136,27 +182,57 @@ func (h *EnterpriseHandler) recordGovernanceAudit(ctx *fasthttp.RequestCtx, meth
 		resourceID = parts[2]
 	}
 
-	_ = h.auditStore.Record(ctx, userID, userEmail, action, resource, resourceID, "", ctx.RemoteAddr().String())
+	h.auditStore.Emit(enterprise.AuditEvent{
+		EventType:  enterprise.EventTypeConfigurationChange,
+		Action:     action,
+		Status:     enterprise.StatusSuccess,
+		Severity:   enterprise.SeverityLow,
+		UserID:     userID,
+		UserEmail:  userEmail,
+		IP:         ctx.RemoteAddr().String(),
+		Resource:   resource,
+		ResourceID: resourceID,
+	})
 }
 
 // RegisterRoutes registers enterprise API routes.
 func (h *EnterpriseHandler) RegisterRoutes(r *router.Router, middlewares ...schemas.BifrostHTTPMiddleware) {
-	// Enterprise login (separate from /api/session/login, supports enterprise users)
+	// Enterprise login/logout
 	r.POST("/api/enterprise/login", lib.ChainMiddlewares(h.login, middlewares...))
+	r.POST("/api/enterprise/logout", lib.ChainMiddlewares(h.logout, middlewares...))
+
+	// User profile (me)
+	r.GET("/api/enterprise/me", lib.ChainMiddlewares(h.getMe, middlewares...))
+	r.PUT("/api/enterprise/me", lib.ChainMiddlewares(h.updateMe, middlewares...))
 
 	// User management
 	r.GET("/api/enterprise/users", lib.ChainMiddlewares(h.listUsers, middlewares...))
+	r.GET("/api/enterprise/users/stats", lib.ChainMiddlewares(h.getUserStats, middlewares...))
 	r.POST("/api/enterprise/users", lib.ChainMiddlewares(h.createUser, middlewares...))
 	r.GET("/api/enterprise/users/{user_id}", lib.ChainMiddlewares(h.getUser, middlewares...))
 	r.PUT("/api/enterprise/users/{user_id}", lib.ChainMiddlewares(h.updateUser, middlewares...))
 	r.DELETE("/api/enterprise/users/{user_id}", lib.ChainMiddlewares(h.deleteUser, middlewares...))
 
-	// Roles & permissions
-	r.GET("/api/enterprise/roles", lib.ChainMiddlewares(h.listRoles, middlewares...))
+	// Team member management
+	r.GET("/api/enterprise/teams/{team_id}/members", lib.ChainMiddlewares(h.listTeamMembers, middlewares...))
+	r.POST("/api/enterprise/teams/{team_id}/members", lib.ChainMiddlewares(h.assignTeamMember, middlewares...))
+	r.DELETE("/api/enterprise/teams/{team_id}/members/{user_id}", lib.ChainMiddlewares(h.removeTeamMember, middlewares...))
+
+	// Roles CRUD
+	r.GET("/api/roles", lib.ChainMiddlewares(h.listRoles, middlewares...))
+	r.POST("/api/roles", lib.ChainMiddlewares(h.createRole, middlewares...))
+	r.GET("/api/roles/{role_id}", lib.ChainMiddlewares(h.getRole, middlewares...))
+	r.PUT("/api/roles/{role_id}", lib.ChainMiddlewares(h.updateRole, middlewares...))
+	r.DELETE("/api/roles/{role_id}", lib.ChainMiddlewares(h.deleteRole, middlewares...))
+	r.GET("/api/roles/{role_id}/permissions", lib.ChainMiddlewares(h.getRolePermissions, middlewares...))
+	r.PUT("/api/roles/{role_id}/permissions", lib.ChainMiddlewares(h.setRolePermissions, middlewares...))
+
+	// Current user permissions (for frontend RBAC context)
 	r.GET("/api/enterprise/permissions", lib.ChainMiddlewares(h.getMyPermissions, middlewares...))
 
 	// Audit logs
 	r.GET("/api/enterprise/audit-logs", lib.ChainMiddlewares(h.queryAuditLogs, middlewares...))
+
 }
 
 // GetUserStore returns the user store.
@@ -169,7 +245,9 @@ func (h *EnterpriseHandler) GetAuditStore() *enterprise.AuditStore {
 	return h.auditStore
 }
 
-// --- Enterprise Login ---
+// =====================
+// Enterprise Login/Logout
+// =====================
 
 func (h *EnterpriseHandler) login(ctx *fasthttp.RequestCtx) {
 	payload := struct {
@@ -185,16 +263,22 @@ func (h *EnterpriseHandler) login(ctx *fasthttp.RequestCtx) {
 	user, err := h.userStore.GetUserByEmail(ctx, payload.Username)
 	if err != nil || user == nil {
 		// Fall through — let the caller try /api/session/login for admin config auth
+		h.auditAuth(ctx, "user_login", enterprise.StatusFailed, enterprise.SeverityMedium,
+			"", payload.Username, `{"reason":"user_not_found"}`)
 		SendError(ctx, fasthttp.StatusUnauthorized, "Invalid username or password")
 		return
 	}
 
 	if !user.IsActive {
+		h.auditAuth(ctx, "user_login", enterprise.StatusBlocked, enterprise.SeverityHigh,
+			user.ID, user.Email, `{"reason":"account_disabled"}`)
 		SendError(ctx, fasthttp.StatusForbidden, "Account is disabled")
 		return
 	}
 
 	if !h.userStore.ValidatePassword(user, payload.Password) {
+		h.auditAuth(ctx, "user_login", enterprise.StatusFailed, enterprise.SeverityMedium,
+			user.ID, user.Email, `{"reason":"invalid_password"}`)
 		SendError(ctx, fasthttp.StatusUnauthorized, "Invalid username or password")
 		return
 	}
@@ -234,9 +318,9 @@ func (h *EnterpriseHandler) login(ctx *fasthttp.RequestCtx) {
 	}
 	ctx.Response.Header.SetCookie(cookie)
 
-	// Record audit log
-	_ = h.auditStore.Record(ctx, user.ID, user.Email, "login", "session", "",
-		fmt.Sprintf(`{"role":%q}`, user.Role), ctx.RemoteAddr().String())
+	// Record login audit
+	h.auditAuth(ctx, "user_login", enterprise.StatusSuccess, enterprise.SeverityLow,
+		user.ID, user.Email, fmt.Sprintf(`{"role":%q}`, user.Role))
 
 	SendJSON(ctx, map[string]interface{}{
 		"message": "Login successful",
@@ -249,7 +333,124 @@ func (h *EnterpriseHandler) login(ctx *fasthttp.RequestCtx) {
 	})
 }
 
-// --- User CRUD ---
+func (h *EnterpriseHandler) logout(ctx *fasthttp.RequestCtx) {
+	// Get token from Authorization header or cookie
+	token := string(ctx.Request.Header.Peek("Authorization"))
+	token = strings.TrimPrefix(token, "Bearer ")
+	if token == "" {
+		token = string(ctx.Request.Header.Cookie("token"))
+	}
+
+	// Clear cookie
+	cookie := fasthttp.AcquireCookie()
+	defer fasthttp.ReleaseCookie(cookie)
+	cookie.SetKey("token")
+	cookie.SetValue("")
+	cookie.SetExpire(time.Now().Add(-time.Hour * 24 * 30))
+	cookie.SetPath("/")
+	cookie.SetHTTPOnly(true)
+	cookie.SetSameSite(fasthttp.CookieSameSiteLaxMode)
+	if string(ctx.Request.Header.Peek("X-Forwarded-Proto")) == "https" {
+		cookie.SetSecure(true)
+	}
+	ctx.Response.Header.SetCookie(cookie)
+
+	if token != "" {
+		tokenHash := encrypt.HashSHA256(token)
+		// Record audit before cleaning up
+		_, userEmail, _, _ := enterprise.ExtractUserFromContext(ctx)
+		if userEmail != "" {
+			h.audit(ctx, "logout", "session", "", "")
+		}
+		// Clean up enterprise user-session mapping
+		_ = h.userStore.DeleteUserSessionByTokenHash(ctx, tokenHash)
+		// Clean up base session
+		_ = h.configStore.DeleteSession(ctx, token)
+	}
+
+	SendJSON(ctx, map[string]string{"message": "Logout successful"})
+}
+
+// =====================
+// User Profile (Me)
+// =====================
+
+func (h *EnterpriseHandler) getMe(ctx *fasthttp.RequestCtx) {
+	userID, _, role, teamID := enterprise.ExtractUserFromContext(ctx)
+	if userID == "" {
+		// Legacy admin session
+		SendJSON(ctx, map[string]interface{}{
+			"user":        nil,
+			"role":        "Admin",
+			"permissions": h.roleStore.GetPermissionsMap("Admin"),
+			"team_id":     nil,
+		})
+		return
+	}
+
+	user, err := h.userStore.GetUser(ctx, userID)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusNotFound, "User not found")
+		return
+	}
+
+	SendJSON(ctx, map[string]interface{}{
+		"user":        user,
+		"role":        role,
+		"permissions": h.roleStore.GetPermissionsMap(role),
+		"team_id":     teamID,
+	})
+}
+
+func (h *EnterpriseHandler) updateMe(ctx *fasthttp.RequestCtx) {
+	userID, _, _, _ := enterprise.ExtractUserFromContext(ctx)
+	if userID == "" {
+		SendError(ctx, fasthttp.StatusForbidden, "Legacy admin profile cannot be updated")
+		return
+	}
+
+	var body map[string]interface{}
+	if err := sonic.Unmarshal(ctx.PostBody(), &body); err != nil {
+		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
+		return
+	}
+
+	// Only allow name and email updates
+	updates := make(map[string]interface{})
+	if name, ok := body["name"].(string); ok && name != "" {
+		updates["name"] = name
+	}
+	if email, ok := body["email"].(string); ok && email != "" {
+		updates["email"] = email
+	}
+	if len(updates) == 0 {
+		SendError(ctx, fasthttp.StatusBadRequest, "No valid fields to update")
+		return
+	}
+
+	user, err := h.userStore.UpdateUser(ctx, userID, updates)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to update profile: %v", err))
+		return
+	}
+
+	h.audit(ctx, "update", "profile", userID, "")
+
+	SendJSON(ctx, user)
+}
+
+// =====================
+// User CRUD
+// =====================
+
+func (h *EnterpriseHandler) getUserStats(ctx *fasthttp.RequestCtx) {
+	stats, err := h.userStore.GetUserStats(ctx)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to get user stats: %v", err))
+		return
+	}
+	SendJSON(ctx, stats)
+}
 
 func (h *EnterpriseHandler) createUser(ctx *fasthttp.RequestCtx) {
 	payload := struct {
@@ -268,19 +469,21 @@ func (h *EnterpriseHandler) createUser(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	if payload.Role == "" {
-		payload.Role = "user"
+		payload.Role = "Viewer"
+	}
+	// Validate role exists
+	if h.roleStore.GetRoleByName(payload.Role) == nil {
+		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("Invalid role: %s", payload.Role))
+		return
 	}
 
-	user, err := h.userStore.CreateUser(ctx, payload.Email, payload.Name, payload.Password, enterprise.Role(payload.Role), payload.TeamID)
+	user, err := h.userStore.CreateUser(ctx, payload.Email, payload.Name, payload.Password, payload.Role, payload.TeamID)
 	if err != nil {
 		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to create user: %v", err))
 		return
 	}
 
-	callerID, callerEmail, _, _ := enterprise.ExtractUserFromContext(ctx)
-	_ = h.auditStore.Record(ctx, callerID, callerEmail, "create", "user", user.ID,
-		fmt.Sprintf(`{"email":%q,"role":%q}`, user.Email, user.Role),
-		ctx.RemoteAddr().String())
+	h.audit(ctx, "create", "user", user.ID, fmt.Sprintf(`{"email":%q,"role":%q}`, user.Email, user.Role))
 
 	SendJSON(ctx, user)
 }
@@ -300,21 +503,26 @@ func (h *EnterpriseHandler) getUser(ctx *fasthttp.RequestCtx) {
 }
 
 func (h *EnterpriseHandler) listUsers(ctx *fasthttp.RequestCtx) {
-	search := string(ctx.QueryArgs().Peek("search"))
-	offset, _ := strconv.Atoi(string(ctx.QueryArgs().Peek("offset")))
-	limit, _ := strconv.Atoi(string(ctx.QueryArgs().Peek("limit")))
-	if limit == 0 {
-		limit = 20
+	params := enterprise.UserListParams{
+		Search: string(ctx.QueryArgs().Peek("search")),
+		Role:   string(ctx.QueryArgs().Peek("role")),
+	}
+	params.Offset, _ = strconv.Atoi(string(ctx.QueryArgs().Peek("offset")))
+	params.Limit, _ = strconv.Atoi(string(ctx.QueryArgs().Peek("limit")))
+
+	// Filter by active status
+	if isActiveStr := string(ctx.QueryArgs().Peek("is_active")); isActiveStr != "" {
+		isActive := isActiveStr == "true"
+		params.IsActive = &isActive
 	}
 
 	// Scope by team for non-admin users
 	_, _, role, teamID := enterprise.ExtractUserFromContext(ctx)
-	var filterTeamID *string
-	if role == enterprise.RoleTeamManager {
-		filterTeamID = teamID
+	if role == "Developer" {
+		params.TeamID = teamID
 	}
 
-	users, total, err := h.userStore.ListUsers(ctx, filterTeamID, search, offset, limit)
+	users, total, err := h.userStore.ListUsers(ctx, params)
 	if err != nil {
 		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to list users: %v", err))
 		return
@@ -332,22 +540,39 @@ func (h *EnterpriseHandler) updateUser(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusBadRequest, "Invalid user ID")
 		return
 	}
-	var updates map[string]interface{}
-	if err := sonic.Unmarshal(ctx.PostBody(), &updates); err != nil {
+	var body map[string]interface{}
+	if err := sonic.Unmarshal(ctx.PostBody(), &body); err != nil {
 		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
 		return
 	}
-	delete(updates, "password")
-	delete(updates, "id")
 
-	user, err := h.userStore.UpdateUser(ctx, userID, updates)
+	// Handle password reset: admin only
+	if newPassword, ok := body["password"].(string); ok && newPassword != "" {
+		_, _, callerRole, _ := enterprise.ExtractUserFromContext(ctx)
+		if callerRole != "Admin" {
+			SendError(ctx, fasthttp.StatusForbidden, "Only admin can reset user passwords")
+			return
+		}
+		if len(newPassword) < 8 {
+			SendError(ctx, fasthttp.StatusBadRequest, "Password must be at least 8 characters")
+			return
+		}
+		if err := h.userStore.UpdatePassword(ctx, userID, newPassword); err != nil {
+			SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to reset password: %v", err))
+			return
+		}
+	}
+
+	delete(body, "password")
+	delete(body, "id")
+
+	user, err := h.userStore.UpdateUser(ctx, userID, body)
 	if err != nil {
 		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to update user: %v", err))
 		return
 	}
 
-	callerID, callerEmail, _, _ := enterprise.ExtractUserFromContext(ctx)
-	_ = h.auditStore.Record(ctx, callerID, callerEmail, "update", "user", userID, "", ctx.RemoteAddr().String())
+	h.audit(ctx, "update", "user", userID, "")
 
 	SendJSON(ctx, user)
 }
@@ -363,37 +588,222 @@ func (h *EnterpriseHandler) deleteUser(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	callerID, callerEmail, _, _ := enterprise.ExtractUserFromContext(ctx)
-	_ = h.auditStore.Record(ctx, callerID, callerEmail, "delete", "user", userID, "", ctx.RemoteAddr().String())
+	h.audit(ctx, "delete", "user", userID, "")
 
 	SendJSON(ctx, map[string]string{"message": "User deleted"})
 }
 
-// --- Roles & Permissions ---
+// =====================
+// Team Member Management
+// =====================
+
+func (h *EnterpriseHandler) listTeamMembers(ctx *fasthttp.RequestCtx) {
+	teamID, ok := ctx.UserValue("team_id").(string)
+	if !ok {
+		SendError(ctx, fasthttp.StatusBadRequest, "Invalid team ID")
+		return
+	}
+
+	users, err := h.userStore.ListUsersByTeam(ctx, teamID)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to list team members: %v", err))
+		return
+	}
+
+	SendJSON(ctx, map[string]interface{}{
+		"data":    users,
+		"team_id": teamID,
+	})
+}
+
+func (h *EnterpriseHandler) assignTeamMember(ctx *fasthttp.RequestCtx) {
+	teamID, ok := ctx.UserValue("team_id").(string)
+	if !ok {
+		SendError(ctx, fasthttp.StatusBadRequest, "Invalid team ID")
+		return
+	}
+
+	payload := struct {
+		UserID string `json:"user_id"`
+	}{}
+	if err := json.Unmarshal(ctx.PostBody(), &payload); err != nil {
+		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
+		return
+	}
+	if payload.UserID == "" {
+		SendError(ctx, fasthttp.StatusBadRequest, "user_id is required")
+		return
+	}
+
+	if err := h.userStore.AssignUserToTeam(ctx, payload.UserID, teamID); err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to assign member: %v", err))
+		return
+	}
+
+	h.audit(ctx, "update", "team_member", teamID, fmt.Sprintf(`{"user_id":%q,"action":"assign"}`, payload.UserID))
+
+	SendJSON(ctx, map[string]string{"message": "Member assigned to team"})
+}
+
+func (h *EnterpriseHandler) removeTeamMember(ctx *fasthttp.RequestCtx) {
+	teamID, ok := ctx.UserValue("team_id").(string)
+	if !ok {
+		SendError(ctx, fasthttp.StatusBadRequest, "Invalid team ID")
+		return
+	}
+	userID, ok := ctx.UserValue("user_id").(string)
+	if !ok {
+		SendError(ctx, fasthttp.StatusBadRequest, "Invalid user ID")
+		return
+	}
+
+	if err := h.userStore.RemoveUserFromTeam(ctx, userID); err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to remove member: %v", err))
+		return
+	}
+
+	h.audit(ctx, "update", "team_member", teamID, fmt.Sprintf(`{"user_id":%q,"action":"remove"}`, userID))
+
+	SendJSON(ctx, map[string]string{"message": "Member removed from team"})
+}
+
+// =====================
+// Roles & Permissions
+// =====================
 
 func (h *EnterpriseHandler) listRoles(ctx *fasthttp.RequestCtx) {
-	SendJSON(ctx, enterprise.GetAllRoles())
+	roles, err := h.roleStore.ListRoles(ctx)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to list roles: %v", err))
+		return
+	}
+	SendJSON(ctx, roles)
+}
+
+func (h *EnterpriseHandler) getRole(ctx *fasthttp.RequestCtx) {
+	roleID, ok := ctx.UserValue("role_id").(string)
+	if !ok {
+		SendError(ctx, fasthttp.StatusBadRequest, "Invalid role ID")
+		return
+	}
+	role, err := h.roleStore.GetRole(ctx, roleID)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusNotFound, "Role not found")
+		return
+	}
+	SendJSON(ctx, role)
+}
+
+func (h *EnterpriseHandler) createRole(ctx *fasthttp.RequestCtx) {
+	payload := struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}{}
+	if err := json.Unmarshal(ctx.PostBody(), &payload); err != nil {
+		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
+		return
+	}
+	if payload.Name == "" {
+		SendError(ctx, fasthttp.StatusBadRequest, "name is required")
+		return
+	}
+	role, err := h.roleStore.CreateRole(ctx, payload.Name, payload.Description)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to create role: %v", err))
+		return
+	}
+	h.audit(ctx, "create", "role", role.ID, fmt.Sprintf(`{"name":%q}`, role.Name))
+	SendJSON(ctx, role)
+}
+
+func (h *EnterpriseHandler) updateRole(ctx *fasthttp.RequestCtx) {
+	roleID, ok := ctx.UserValue("role_id").(string)
+	if !ok {
+		SendError(ctx, fasthttp.StatusBadRequest, "Invalid role ID")
+		return
+	}
+	payload := struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}{}
+	if err := json.Unmarshal(ctx.PostBody(), &payload); err != nil {
+		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
+		return
+	}
+	role, err := h.roleStore.UpdateRole(ctx, roleID, payload.Name, payload.Description)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to update role: %v", err))
+		return
+	}
+	h.audit(ctx, "update", "role", roleID, "")
+	SendJSON(ctx, role)
+}
+
+func (h *EnterpriseHandler) deleteRole(ctx *fasthttp.RequestCtx) {
+	roleID, ok := ctx.UserValue("role_id").(string)
+	if !ok {
+		SendError(ctx, fasthttp.StatusBadRequest, "Invalid role ID")
+		return
+	}
+	if err := h.roleStore.DeleteRole(ctx, roleID); err != nil {
+		SendError(ctx, fasthttp.StatusBadRequest, err.Error())
+		return
+	}
+	h.audit(ctx, "delete", "role", roleID, "")
+	SendJSON(ctx, map[string]string{"message": "Role deleted"})
+}
+
+func (h *EnterpriseHandler) getRolePermissions(ctx *fasthttp.RequestCtx) {
+	roleID, ok := ctx.UserValue("role_id").(string)
+	if !ok {
+		SendError(ctx, fasthttp.StatusBadRequest, "Invalid role ID")
+		return
+	}
+	perms, err := h.roleStore.GetRolePermissions(ctx, roleID)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to get permissions: %v", err))
+		return
+	}
+	SendJSON(ctx, perms)
+}
+
+func (h *EnterpriseHandler) setRolePermissions(ctx *fasthttp.RequestCtx) {
+	roleID, ok := ctx.UserValue("role_id").(string)
+	if !ok {
+		SendError(ctx, fasthttp.StatusBadRequest, "Invalid role ID")
+		return
+	}
+	var permissions []struct {
+		Resource  string `json:"resource"`
+		Operation string `json:"operation"`
+	}
+	if err := json.Unmarshal(ctx.PostBody(), &permissions); err != nil {
+		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
+		return
+	}
+	if err := h.roleStore.SetRolePermissions(ctx, roleID, permissions); err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to set permissions: %v", err))
+		return
+	}
+	h.audit(ctx, "update", "role_permissions", roleID, fmt.Sprintf(`{"count":%d}`, len(permissions)))
+	SendJSON(ctx, map[string]string{"message": "Permissions updated"})
 }
 
 func (h *EnterpriseHandler) getMyPermissions(ctx *fasthttp.RequestCtx) {
 	_, _, role, teamID := enterprise.ExtractUserFromContext(ctx)
 	if role == "" {
-		// No enterprise user context — return admin permissions (legacy/config-based auth)
-		SendJSON(ctx, map[string]interface{}{
-			"role":        enterprise.RoleAdmin,
-			"permissions": enterprise.GetPermissionsMap(enterprise.RoleAdmin),
-			"team_id":     nil,
-		})
-		return
+		role = "Admin"
 	}
 	SendJSON(ctx, map[string]interface{}{
 		"role":        role,
-		"permissions": enterprise.GetPermissionsMap(role),
+		"permissions": h.roleStore.GetPermissionsMap(role),
 		"team_id":     teamID,
 	})
 }
 
-// --- Audit Logs ---
+// =====================
+// Audit Logs
+// =====================
 
 func (h *EnterpriseHandler) queryAuditLogs(ctx *fasthttp.RequestCtx) {
 	q := enterprise.AuditLogQuery{

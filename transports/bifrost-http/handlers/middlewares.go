@@ -563,8 +563,15 @@ func (m *AuthMiddleware) middleware(shouldSkip func(*configstore.AuthConfig, str
 		return func(ctx *fasthttp.RequestCtx) {
 			authConfig := m.authConfig.Load()
 			if authConfig == nil || !authConfig.IsEnabled {
-				logger.Debug("auth middleware is disabled because auth config is not present or not enabled")
-				ctx.SetUserValue(schemas.BifrostContextKeySessionToken, "")
+				// Auth is disabled in config, but still extract session token from cookie
+				// for enterprise RBAC middleware to use downstream.
+				token := ""
+				if cookieToken := string(ctx.Request.Header.Cookie("token")); cookieToken != "" {
+					token = cookieToken
+				} else if authHeader := string(ctx.Request.Header.Peek("Authorization")); strings.HasPrefix(authHeader, "Bearer ") {
+					token = strings.TrimPrefix(authHeader, "Bearer ")
+				}
+				ctx.SetUserValue(schemas.BifrostContextKeySessionToken, token)
 				next(ctx)
 				return
 			}

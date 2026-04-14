@@ -19,15 +19,17 @@ import (
 
 // SessionHandler manages HTTP requests for session operations
 type SessionHandler struct {
-	configStore   configstore.ConfigStore
-	wsTicketStore *WSTicketStore
+	configStore       configstore.ConfigStore
+	wsTicketStore     *WSTicketStore
+	enterpriseEnabled bool
 }
 
 // NewSessionHandler creates a new session handler instance
-func NewSessionHandler(configStore configstore.ConfigStore, wsTicketStore *WSTicketStore) *SessionHandler {
+func NewSessionHandler(configStore configstore.ConfigStore, wsTicketStore *WSTicketStore, enterpriseEnabled bool) *SessionHandler {
 	return &SessionHandler{
-		configStore:   configStore,
-		wsTicketStore: wsTicketStore,
+		configStore:       configStore,
+		wsTicketStore:     wsTicketStore,
+		enterpriseEnabled: enterpriseEnabled,
 	}
 }
 
@@ -73,8 +75,9 @@ func (h *SessionHandler) isAuthEnabled(ctx *fasthttp.RequestCtx) {
 			hasValidToken = true
 		}
 	}
+	isEnabled := authConfig.IsEnabled || h.enterpriseEnabled
 	SendJSON(ctx, map[string]any{
-		"is_auth_enabled": authConfig.IsEnabled,
+		"is_auth_enabled": isEnabled,
 		"has_valid_token": hasValidToken,
 	})
 }
@@ -209,7 +212,7 @@ func (h *SessionHandler) issueWSTicket(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusServiceUnavailable, "WebSocket tickets are not available")
 		return
 	}
-	sessionToken,ok := ctx.UserValue(schemas.BifrostContextKeySessionToken).(string)
+	sessionToken, ok := ctx.UserValue(schemas.BifrostContextKeySessionToken).(string)
 	if !ok {
 		SendError(ctx, fasthttp.StatusUnauthorized, "Unauthorized")
 		return

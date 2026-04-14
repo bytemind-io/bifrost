@@ -251,6 +251,24 @@ type UpdateProviderGovernanceRequest struct {
 	RateLimit *UpdateRateLimitRequest `json:"rate_limit,omitempty"`
 }
 
+// getEnterpriseTeamScope returns the team_id to filter by for non-admin users.
+// Admin and Viewer see everything; Developer role is scoped to their team.
+func getEnterpriseTeamScope(ctx *fasthttp.RequestCtx) (teamID string, shouldFilter bool) {
+	role, _ := ctx.UserValue("enterprise_user_role").(string)
+	if role == "" || role == "Admin" || role == "Viewer" {
+		return "", false
+	}
+	// Developer and custom roles: scope to their team if assigned
+	if ptr, ok := ctx.UserValue("enterprise_user_team_id").(*string); ok && ptr != nil {
+		return *ptr, true
+	}
+	// Has a role but no team — deny all data
+	if role == "Developer" {
+		return "__no_team__", true
+	}
+	return "", false
+}
+
 // RegisterRoutes registers all governance-related routes for the new hierarchical system
 func (h *GovernanceHandler) RegisterRoutes(r *router.Router, middlewares ...schemas.BifrostHTTPMiddleware) {
 	// Virtual Key CRUD operations
@@ -303,6 +321,9 @@ func (h *GovernanceHandler) RegisterRoutes(r *router.Router, middlewares ...sche
 // getVirtualKeys handles GET /api/governance/virtual-keys - Get all virtual keys with relationships
 func (h *GovernanceHandler) getVirtualKeys(ctx *fasthttp.RequestCtx) {
 	// Check if "from_memory" query parameter is set to true
+	// Enterprise data-level filtering for from_memory path
+	scopeTeamID, shouldFilterTeam := getEnterpriseTeamScope(ctx)
+
 	fromMemory := string(ctx.QueryArgs().Peek("from_memory")) == "true"
 	if fromMemory {
 		data := h.governanceManager.GetGovernanceData()
@@ -313,6 +334,12 @@ func (h *GovernanceHandler) getVirtualKeys(ctx *fasthttp.RequestCtx) {
 		// Convert map to slice to match the non-memory response format (array)
 		virtualKeys := make([]*configstoreTables.TableVirtualKey, 0, len(data.VirtualKeys))
 		for _, vk := range data.VirtualKeys {
+			// Filter by team scope if applicable
+			if shouldFilterTeam {
+				if vk.TeamID == nil || *vk.TeamID != scopeTeamID {
+					continue
+				}
+			}
 			virtualKeys = append(virtualKeys, vk)
 		}
 		sort.Slice(virtualKeys, func(i, j int) bool {
@@ -333,6 +360,11 @@ func (h *GovernanceHandler) getVirtualKeys(ctx *fasthttp.RequestCtx) {
 	search := string(ctx.QueryArgs().Peek("search"))
 	customerID := string(ctx.QueryArgs().Peek("customer_id"))
 	teamID := string(ctx.QueryArgs().Peek("team_id"))
+
+	// Enterprise data-level filtering: non-admin users only see their team's VKs
+	if shouldFilterTeam {
+		teamID = scopeTeamID
+	}
 
 	if limitStr != "" || offsetStr != "" || search != "" || customerID != "" || teamID != "" {
 		// Paginated/filtered path
@@ -383,7 +415,25 @@ func (h *GovernanceHandler) getVirtualKeys(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	// Non-paginated path: return all virtual keys
+	// Non-paginated path: if team-scoped, use paginated path with team filter
+	if teamID != "" {
+		params := configstore.VirtualKeyQueryParams{TeamID: teamID, Limit: 10000}
+		virtualKeys, totalCount, err := h.configStore.GetVirtualKeysPaginated(ctx, params)
+		if err != nil {
+			logger.Error("failed to retrieve virtual keys: %v", err)
+			SendError(ctx, 500, "Failed to retrieve virtual keys")
+			return
+		}
+		SendJSON(ctx, map[string]interface{}{
+			"virtual_keys": virtualKeys,
+			"count":        len(virtualKeys),
+			"total_count":  totalCount,
+			"limit":        len(virtualKeys),
+			"offset":       0,
+		})
+		return
+	}
+
 	virtualKeys, err := h.configStore.GetVirtualKeys(ctx)
 	if err != nil {
 		logger.Error("failed to retrieve virtual keys: %v", err)
@@ -410,6 +460,11 @@ func (h *GovernanceHandler) createVirtualKey(ctx *fasthttp.RequestCtx) {
 	if req.Name == "" {
 		SendError(ctx, 400, "Virtual key name is required")
 		return
+	}
+	// Enterprise: Team role users auto-assign their team_id
+	if scopeTeamID, shouldFilter := getEnterpriseTeamScope(ctx); shouldFilter && scopeTeamID != "__no_team__" {
+		req.TeamID = &scopeTeamID
+		req.CustomerID = nil
 	}
 	// Validate mutually exclusive TeamID and CustomerID
 	if req.TeamID != nil && req.CustomerID != nil {
@@ -1181,8 +1236,34 @@ func (h *GovernanceHandler) deleteVirtualKey(ctx *fasthttp.RequestCtx) {
 // getTeams handles GET /api/governance/teams - Get all teams
 func (h *GovernanceHandler) getTeams(ctx *fasthttp.RequestCtx) {
 	customerID := string(ctx.QueryArgs().Peek("customer_id"))
+
+	// Enterprise data-level filtering: Team/User roles only see their own team
+	scopeTeamID, shouldFilterTeam := getEnterpriseTeamScope(ctx)
+
 	// Check if "from_memory" query parameter is set to true
 	fromMemory := string(ctx.QueryArgs().Peek("from_memory")) == "true"
+	// If team-scoped, return only the user's team directly
+	if shouldFilterTeam {
+		if scopeTeamID == "__no_team__" {
+			SendJSON(ctx, map[string]interface{}{"teams": []interface{}{}, "count": 0, "total_count": 0, "limit": 0, "offset": 0})
+			return
+		}
+		// Fetch only the user's team from configStore
+		team, err := h.configStore.GetTeam(ctx, scopeTeamID)
+		if err != nil {
+			SendJSON(ctx, map[string]interface{}{"teams": []interface{}{}, "count": 0, "total_count": 0, "limit": 0, "offset": 0})
+			return
+		}
+		SendJSON(ctx, map[string]interface{}{
+			"teams":       []interface{}{team},
+			"count":       1,
+			"total_count": 1,
+			"limit":       1,
+			"offset":      0,
+		})
+		return
+	}
+
 	if fromMemory {
 		data := h.governanceManager.GetGovernanceData()
 		if data == nil {
@@ -1599,6 +1680,33 @@ func (h *GovernanceHandler) deleteTeam(ctx *fasthttp.RequestCtx) {
 
 // getCustomers handles GET /api/governance/customers - Get all customers
 func (h *GovernanceHandler) getCustomers(ctx *fasthttp.RequestCtx) {
+	// Enterprise data-level filtering: Team/User roles only see their team's customer
+	if scopeTeamID, shouldFilter := getEnterpriseTeamScope(ctx); shouldFilter {
+		if scopeTeamID == "__no_team__" {
+			SendJSON(ctx, map[string]interface{}{"customers": []interface{}{}, "count": 0, "total_count": 0, "limit": 0, "offset": 0})
+			return
+		}
+		// Fetch the team to find its customer_id
+		team, err := h.configStore.GetTeam(ctx, scopeTeamID)
+		if err != nil || team.CustomerID == nil {
+			SendJSON(ctx, map[string]interface{}{"customers": []interface{}{}, "count": 0, "total_count": 0, "limit": 0, "offset": 0})
+			return
+		}
+		customer, err := h.configStore.GetCustomer(ctx, *team.CustomerID)
+		if err != nil {
+			SendJSON(ctx, map[string]interface{}{"customers": []interface{}{}, "count": 0, "total_count": 0, "limit": 0, "offset": 0})
+			return
+		}
+		SendJSON(ctx, map[string]interface{}{
+			"customers":   []interface{}{customer},
+			"count":       1,
+			"total_count": 1,
+			"limit":       1,
+			"offset":      0,
+		})
+		return
+	}
+
 	// Check if "from_memory" query parameter is set to true
 	fromMemory := string(ctx.QueryArgs().Peek("from_memory")) == "true"
 	if fromMemory {

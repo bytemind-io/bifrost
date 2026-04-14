@@ -1002,7 +1002,7 @@ func (s *BifrostHTTPServer) RegisterAPIRoutes(ctx context.Context, callbacks Ser
 	mcpHandler := handlers.NewMCPHandler(callbacks, s.Client, s.Config, oauthHandler)
 	configHandler := handlers.NewConfigHandler(callbacks, s.Config)
 	pluginsHandler := handlers.NewPluginsHandler(callbacks, s.Config.ConfigStore)
-	sessionHandler := handlers.NewSessionHandler(s.Config.ConfigStore, s.WSTicketStore)
+	sessionHandler := handlers.NewSessionHandler(s.Config.ConfigStore, s.WSTicketStore, s.EnterpriseHandler != nil)
 	promptsHandler := handlers.NewPromptsHandler(s.Config.ConfigStore)
 	// Going ahead with API handlers
 	healthHandler.RegisterRoutes(s.Router, middlewares...)
@@ -1145,7 +1145,7 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 	if s.Config.KVStore != nil {
 		integrations.RegisterKVDecoders(s.Config.KVStore)
 	}
-	// Initialize enterprise stores (users, audit logs) if DB is available
+	// Initialize enterprise stores (users, audit logs, roles) if DB is available
 	if s.Config.ConfigStore != nil {
 		db := s.Config.ConfigStore.DB()
 		userStore, userErr := enterprise.NewUserStore(db)
@@ -1156,13 +1156,16 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 		if auditErr != nil {
 			logger.Error("failed to initialize enterprise audit store: %v", auditErr)
 		}
-		if userStore != nil && auditStore != nil {
-			s.EnterpriseHandler = handlers.NewEnterpriseHandler(userStore, auditStore, s.Config.ConfigStore)
-			// Seed a default admin user if none exists
+		roleStore, roleErr := enterprise.NewRoleStore(db)
+		if roleErr != nil {
+			logger.Error("failed to initialize enterprise role store: %v", roleErr)
+		}
+		if userStore != nil && auditStore != nil && roleStore != nil {
+			s.EnterpriseHandler = handlers.NewEnterpriseHandler(userStore, auditStore, roleStore, s.Config.ConfigStore)
 			if seedErr := userStore.EnsureAdminExists(ctx, "admin@bifrost.local", "Admin", "admin"); seedErr != nil {
 				logger.Warn("failed to seed default admin user: %v", seedErr)
 			}
-			logger.Info("enterprise module initialized (users, audit logs)")
+			logger.Info("enterprise module initialized (users, audit logs, roles)")
 		}
 	}
 	// Initialize WebSocket handler early so plugins can wire event broadcasters during Init.

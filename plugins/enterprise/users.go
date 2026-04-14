@@ -40,21 +40,14 @@ func NewUserStore(db *gorm.DB) (*UserStore, error) {
 	return &UserStore{db: db}, nil
 }
 
-// ValidRoles is the set of valid role values.
-var ValidRoles = map[Role]bool{
-	RoleAdmin:       true,
-	RoleTeamManager: true,
-	RoleUser:        true,
-	RoleViewer:      true,
-}
-
 // CreateUser creates a new user with hashed password.
-func (s *UserStore) CreateUser(ctx context.Context, email, name, password string, role Role, teamID *string) (*TableUser, error) {
+// role is validated by the handler against the RoleStore.
+func (s *UserStore) CreateUser(ctx context.Context, email, name, password, role string, teamID *string) (*TableUser, error) {
 	if password == "" {
 		return nil, fmt.Errorf("password cannot be empty")
 	}
-	if !ValidRoles[role] {
-		return nil, fmt.Errorf("invalid role: %s", role)
+	if role == "" {
+		return nil, fmt.Errorf("role cannot be empty")
 	}
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -98,26 +91,76 @@ func (s *UserStore) GetUserByEmail(ctx context.Context, email string) (*TableUse
 	return &user, nil
 }
 
-// ListUsers returns paginated user list, optionally filtered by team.
-func (s *UserStore) ListUsers(ctx context.Context, teamID *string, search string, offset, limit int) ([]TableUser, int64, error) {
+// UserListParams defines query parameters for listing users.
+type UserListParams struct {
+	TeamID   *string
+	Role     string
+	IsActive *bool
+	Search   string
+	Offset   int
+	Limit    int
+}
+
+// ListUsers returns paginated user list with optional filters.
+func (s *UserStore) ListUsers(ctx context.Context, params UserListParams) ([]TableUser, int64, error) {
 	var users []TableUser
 	var total int64
 
 	query := s.db.WithContext(ctx).Model(&TableUser{})
-	if teamID != nil {
-		query = query.Where("team_id = ?", *teamID)
+	if params.TeamID != nil {
+		query = query.Where("team_id = ?", *params.TeamID)
 	}
-	if search != "" {
-		query = query.Where("name LIKE ? OR email LIKE ?", "%"+search+"%", "%"+search+"%")
+	if params.Role != "" {
+		query = query.Where("role = ?", params.Role)
+	}
+	if params.IsActive != nil {
+		query = query.Where("is_active = ?", *params.IsActive)
+	}
+	if params.Search != "" {
+		query = query.Where("name LIKE ? OR email LIKE ?", "%"+params.Search+"%", "%"+params.Search+"%")
 	}
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if err := query.Order("created_at DESC").Offset(offset).Limit(limit).Find(&users).Error; err != nil {
+	if params.Limit == 0 {
+		params.Limit = 20
+	}
+	if err := query.Order("created_at DESC").Offset(params.Offset).Limit(params.Limit).Find(&users).Error; err != nil {
 		return nil, 0, err
 	}
 	return users, total, nil
+}
+
+// UserStats returns aggregate user statistics.
+type UserStats struct {
+	Total          int64            `json:"total"`
+	Active         int64            `json:"active"`
+	Inactive       int64            `json:"inactive"`
+	ByRole         map[string]int64 `json:"by_role"`
+	ActiveSessions int64            `json:"active_sessions"`
+}
+
+// GetUserStats returns user statistics.
+func (s *UserStore) GetUserStats(ctx context.Context) (*UserStats, error) {
+	stats := &UserStats{ByRole: make(map[string]int64)}
+
+	s.db.WithContext(ctx).Model(&TableUser{}).Count(&stats.Total)
+	s.db.WithContext(ctx).Model(&TableUser{}).Where("is_active = ?", true).Count(&stats.Active)
+	stats.Inactive = stats.Total - stats.Active
+
+	type roleCount struct {
+		Role  string
+		Count int64
+	}
+	var roles []roleCount
+	s.db.WithContext(ctx).Model(&TableUser{}).Select("role, count(*) as count").Group("role").Scan(&roles)
+	for _, r := range roles {
+		stats.ByRole[r.Role] = r.Count
+	}
+
+	s.db.WithContext(ctx).Model(&TableUserSession{}).Where("expires_at > ?", time.Now()).Count(&stats.ActiveSessions)
+	return stats, nil
 }
 
 // UpdateUser updates user fields.
@@ -159,11 +202,11 @@ func (s *UserStore) ValidatePassword(user *TableUser, password string) bool {
 // EnsureAdminExists creates a default admin user if no admin exists.
 func (s *UserStore) EnsureAdminExists(ctx context.Context, email, name, password string) error {
 	var count int64
-	s.db.WithContext(ctx).Model(&TableUser{}).Where("role = ?", string(RoleAdmin)).Count(&count)
+	s.db.WithContext(ctx).Model(&TableUser{}).Where("role = ?", "Admin").Count(&count)
 	if count > 0 {
 		return nil
 	}
-	_, err := s.CreateUser(ctx, email, name, password, RoleAdmin, nil)
+	_, err := s.CreateUser(ctx, email, name, password, "Admin", nil)
 	return err
 }
 
@@ -209,6 +252,62 @@ func (s *UserStore) GetUserByTokenHash(ctx context.Context, tokenHash string) (*
 // DeleteUserSessionsByUserID removes all sessions for a user.
 func (s *UserStore) DeleteUserSessionsByUserID(ctx context.Context, userID string) error {
 	return s.db.WithContext(ctx).Where("user_id = ?", userID).Delete(&TableUserSession{}).Error
+}
+
+// ListUsersByTeam returns all users belonging to a specific team.
+func (s *UserStore) ListUsersByTeam(ctx context.Context, teamID string) ([]TableUser, error) {
+	var users []TableUser
+	if err := s.db.WithContext(ctx).Where("team_id = ?", teamID).Order("created_at DESC").Find(&users).Error; err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+// AssignUserToTeam sets a user's team_id.
+func (s *UserStore) AssignUserToTeam(ctx context.Context, userID string, teamID string) error {
+	return s.db.WithContext(ctx).Model(&TableUser{}).Where("id = ?", userID).Updates(map[string]interface{}{
+		"team_id":    teamID,
+		"updated_at": time.Now(),
+	}).Error
+}
+
+// RemoveUserFromTeam clears a user's team_id.
+func (s *UserStore) RemoveUserFromTeam(ctx context.Context, userID string) error {
+	return s.db.WithContext(ctx).Model(&TableUser{}).Where("id = ?", userID).Updates(map[string]interface{}{
+		"team_id":    nil,
+		"updated_at": time.Now(),
+	}).Error
+}
+
+// CountUsersByRole returns the count of users grouped by role.
+func (s *UserStore) CountUsersByRole(ctx context.Context) (map[string]int64, error) {
+	type result struct {
+		Role  string
+		Count int64
+	}
+	var results []result
+	if err := s.db.WithContext(ctx).Model(&TableUser{}).Select("role, count(*) as count").Group("role").Scan(&results).Error; err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int64)
+	for _, r := range results {
+		counts[r.Role] = r.Count
+	}
+	return counts, nil
+}
+
+// CountActiveSessions returns the number of non-expired sessions.
+func (s *UserStore) CountActiveSessions(ctx context.Context) (int64, error) {
+	var count int64
+	if err := s.db.WithContext(ctx).Model(&TableUserSession{}).Where("expires_at > ?", time.Now()).Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// DeleteUserSessionByTokenHash removes a specific session by its token hash.
+func (s *UserStore) DeleteUserSessionByTokenHash(ctx context.Context, tokenHash string) error {
+	return s.db.WithContext(ctx).Where("token_hash = ?", tokenHash).Delete(&TableUserSession{}).Error
 }
 
 // CleanExpiredUserSessions removes expired session mappings.

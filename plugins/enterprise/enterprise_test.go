@@ -28,11 +28,11 @@ func TestUserStore_DuplicateEmail(t *testing.T) {
 	store, _ := NewUserStore(db)
 	ctx := context.Background()
 
-	_, err := store.CreateUser(ctx, "dup@test.com", "User1", "pass", RoleUser, nil)
+	_, err := store.CreateUser(ctx, "dup@test.com", "User1", "pass", "Viewer", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.CreateUser(ctx, "dup@test.com", "User2", "pass", RoleUser, nil)
+	_, err = store.CreateUser(ctx, "dup@test.com", "User2", "pass", "Viewer", nil)
 	if err == nil {
 		t.Error("BUG: creating user with duplicate email should fail")
 	}
@@ -45,24 +45,13 @@ func TestUserStore_EmptyPassword(t *testing.T) {
 	store, _ := NewUserStore(db)
 	ctx := context.Background()
 
-	_, err := store.CreateUser(ctx, "test@test.com", "Test", "", RoleUser, nil)
+	_, err := store.CreateUser(ctx, "test@test.com", "Test", "", "Viewer", nil)
 	if err == nil {
 		t.Error("BUG: empty password should be rejected at store level")
 	}
 }
 
 // --- Bug #3: Invalid role should be caught ---
-
-func TestUserStore_InvalidRole(t *testing.T) {
-	db := newTestDB(t)
-	store, _ := NewUserStore(db)
-	ctx := context.Background()
-
-	_, err := store.CreateUser(ctx, "test@test.com", "Test", "pass", Role("superuser"), nil)
-	if err == nil {
-		t.Error("BUG: invalid role should be rejected at store level")
-	}
-}
 
 // --- Bug #4: GetUser for nonexistent ID ---
 
@@ -104,7 +93,7 @@ func TestUserStore_CleanExpiredSessions(t *testing.T) {
 	store, _ := NewUserStore(db)
 	ctx := context.Background()
 
-	user, _ := store.CreateUser(ctx, "test@test.com", "Test", "pass", RoleUser, nil)
+	user, _ := store.CreateUser(ctx, "test@test.com", "Test", "pass", "Viewer", nil)
 
 	// Create expired session
 	store.CreateUserSession(ctx, user.ID, "expired-hash", time.Now().Add(-1*time.Hour))
@@ -139,7 +128,7 @@ func TestUserStore_DeleteUserCascadesSessions(t *testing.T) {
 	store, _ := NewUserStore(db)
 	ctx := context.Background()
 
-	user, _ := store.CreateUser(ctx, "test@test.com", "Test", "pass", RoleUser, nil)
+	user, _ := store.CreateUser(ctx, "test@test.com", "Test", "pass", "Viewer", nil)
 	store.CreateUserSession(ctx, user.ID, "session-hash", time.Now().Add(24*time.Hour))
 
 	// Delete user - should cascade to sessions
@@ -270,11 +259,11 @@ func TestUserStore_Pagination(t *testing.T) {
 
 	// Create 5 users
 	for i := 0; i < 5; i++ {
-		store.CreateUser(ctx, "user"+string(rune('a'+i))+"@test.com", "User", "pass", RoleUser, nil)
+		store.CreateUser(ctx, "user"+string(rune('a'+i))+"@test.com", "User", "pass", "Viewer", nil)
 	}
 
 	// Page 1
-	users, total, _ := store.ListUsers(ctx, nil, "", 0, 2)
+	users, total, _ := store.ListUsers(ctx, UserListParams{Offset: 0, Limit: 2})
 	if total != 5 {
 		t.Errorf("expected total=5, got %d", total)
 	}
@@ -283,19 +272,19 @@ func TestUserStore_Pagination(t *testing.T) {
 	}
 
 	// Page 2
-	users, _, _ = store.ListUsers(ctx, nil, "", 2, 2)
+	users, _, _ = store.ListUsers(ctx, UserListParams{Offset: 2, Limit: 2})
 	if len(users) != 2 {
 		t.Errorf("expected 2 users on page 2, got %d", len(users))
 	}
 
 	// Page 3
-	users, _, _ = store.ListUsers(ctx, nil, "", 4, 2)
+	users, _, _ = store.ListUsers(ctx, UserListParams{Offset: 4, Limit: 2})
 	if len(users) != 1 {
 		t.Errorf("expected 1 user on page 3, got %d", len(users))
 	}
 
 	// Beyond range
-	users, _, _ = store.ListUsers(ctx, nil, "", 10, 2)
+	users, _, _ = store.ListUsers(ctx, UserListParams{Offset: 10, Limit: 2})
 	if len(users) != 0 {
 		t.Errorf("expected 0 users beyond range, got %d", len(users))
 	}
@@ -308,7 +297,7 @@ func TestUserStore_MultipleSessions(t *testing.T) {
 	store, _ := NewUserStore(db)
 	ctx := context.Background()
 
-	user, _ := store.CreateUser(ctx, "test@test.com", "Test", "pass", RoleUser, nil)
+	user, _ := store.CreateUser(ctx, "test@test.com", "Test", "pass", "Viewer", nil)
 
 	// Create multiple sessions
 	store.CreateUserSession(ctx, user.ID, "hash1", time.Now().Add(24*time.Hour))
@@ -335,30 +324,29 @@ func TestUserStore_MultipleSessions(t *testing.T) {
 // --- Bug #13: Route permission edge cases ---
 
 func TestCheckRoutePermission_EdgeCases(t *testing.T) {
-	// Unknown route should be denied for non-admin
-	if CheckRoutePermission(RoleUser, "GET", "/api/unknown/endpoint") {
-		t.Error("unknown route should be denied for User")
+	db := setupTestDB(t)
+	store, _ := NewRoleStore(db)
+
+	if CheckRoutePermission(store, "Viewer", "GET", "/api/unknown/endpoint") {
+		t.Error("unknown route should be denied for Viewer")
 	}
-	if !CheckRoutePermission(RoleAdmin, "GET", "/api/unknown/endpoint") {
+	if !CheckRoutePermission(store, "Admin", "GET", "/api/unknown/endpoint") {
 		t.Error("unknown route should be allowed for Admin")
 	}
-
-	// Health endpoint
-	if !CheckRoutePermission(RoleUser, "GET", "/health") {
+	if !CheckRoutePermission(store, "Viewer", "GET", "/health") {
 		t.Error("/health should be whitelisted for all")
 	}
-
-	// Governance provider routes
-	if !CheckRoutePermission(RoleViewer, "GET", "/api/providers") {
+	if !CheckRoutePermission(store, "Viewer", "GET", "/api/providers") {
 		t.Error("Viewer should be able to read providers")
 	}
-	if CheckRoutePermission(RoleViewer, "DELETE", "/api/providers/openai") {
+	if CheckRoutePermission(store, "Viewer", "DELETE", "/api/providers/openai") {
 		t.Error("Viewer should NOT be able to delete providers")
 	}
-
-	// Routing rules
-	if CheckRoutePermission(RoleUser, "GET", "/api/governance/routing-rules") {
-		t.Error("User should not have access to routing rules (not in User permissions)")
+	if !CheckRoutePermission(store, "Viewer", "GET", "/api/governance/routing-rules") {
+		t.Error("Viewer should be able to read routing rules")
+	}
+	if CheckRoutePermission(store, "Viewer", "POST", "/api/governance/routing-rules") {
+		t.Error("Viewer should NOT be able to create routing rules")
 	}
 }
 
@@ -369,7 +357,7 @@ func TestUserStore_UpdatePassword(t *testing.T) {
 	store, _ := NewUserStore(db)
 	ctx := context.Background()
 
-	user, _ := store.CreateUser(ctx, "test@test.com", "Test", "oldpass", RoleUser, nil)
+	user, _ := store.CreateUser(ctx, "test@test.com", "Test", "oldpass", "Viewer", nil)
 
 	err := store.UpdatePassword(ctx, user.ID, "newpass123")
 	if err != nil {

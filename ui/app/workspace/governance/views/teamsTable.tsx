@@ -23,11 +23,100 @@ import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/utils/governance";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { Input } from "@/components/ui/input";
-import { ChevronLeft, ChevronRight, Edit, Plus, Search, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { ChevronLeft, ChevronRight, Edit, Plus, Search, Trash2, Users } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import TeamDialog from "./teamDialog";
 import { TeamsEmptyState } from "./teamsEmptyState";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+
+interface TeamMember {
+	id: string;
+	name: string;
+	email: string;
+	role: string;
+	is_active: boolean;
+}
+
+function TeamMembersDialog({ teamId, teamName, open, onOpenChange }: { teamId: string; teamName: string; open: boolean; onOpenChange: (open: boolean) => void }) {
+	const [members, setMembers] = useState<TeamMember[]>([]);
+	const [isLoading, setIsLoading] = useState(true);
+	const [addDialogOpen, setAddDialogOpen] = useState(false);
+	const [userId, setUserId] = useState("");
+	const [isSaving, setIsSaving] = useState(false);
+	const hasUpdateAccess = useRbac(RbacResource.Teams, RbacOperation.Update);
+
+	const fetchMembers = useCallback(async () => {
+		if (!open) return;
+		setIsLoading(true);
+		try {
+			const res = await fetch(`/api/enterprise/teams/${teamId}/members`, { credentials: "include" });
+			if (res.ok) { const data = await res.json(); setMembers(data.data || []); }
+		} catch { /* ignore */ } finally { setIsLoading(false); }
+	}, [teamId, open]);
+
+	useEffect(() => { fetchMembers(); }, [fetchMembers]);
+
+	const handleAssign = async () => {
+		if (!userId.trim()) return;
+		setIsSaving(true);
+		try {
+			const res = await fetch(`/api/enterprise/teams/${teamId}/members`, {
+				method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+				body: JSON.stringify({ user_id: userId }),
+			});
+			if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.message || d.error || "Failed"); }
+			toast.success("Member added"); setAddDialogOpen(false); setUserId(""); fetchMembers();
+		} catch (err: any) { toast.error(err.message); } finally { setIsSaving(false); }
+	};
+
+	const handleRemove = async (member: TeamMember) => {
+		if (!confirm(`Remove "${member.name}" from team?`)) return;
+		try {
+			const res = await fetch(`/api/enterprise/teams/${teamId}/members/${member.id}`, { method: "DELETE", credentials: "include" });
+			if (res.ok) { toast.success("Member removed"); fetchMembers(); }
+		} catch { toast.error("Failed to remove member"); }
+	};
+
+	return (
+		<>
+			<Dialog open={open} onOpenChange={onOpenChange}>
+				<DialogContent className="max-w-lg">
+					<DialogHeader>
+						<DialogTitle>Team Members: {teamName}</DialogTitle>
+						<DialogDescription>Manage users in this team.</DialogDescription>
+					</DialogHeader>
+					<div className="space-y-3 py-2">
+						{isLoading ? <p className="text-muted-foreground text-sm text-center py-4">Loading...</p>
+						: members.length === 0 ? <p className="text-muted-foreground text-sm text-center py-4">No members in this team</p>
+						: members.map((m) => (
+							<div key={m.id} className="flex items-center justify-between rounded-sm border px-3 py-2">
+								<div><p className="text-sm font-medium">{m.name}</p><p className="text-muted-foreground text-xs">{m.email}</p></div>
+								<div className="flex items-center gap-2">
+									<Badge variant="outline" className="text-xs">{m.role}</Badge>
+									{hasUpdateAccess && <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleRemove(m)}><Trash2 className="h-3 w-3" /></Button>}
+								</div>
+							</div>
+						))}
+					</div>
+					<DialogFooter>
+						{hasUpdateAccess && <Button size="sm" variant="outline" onClick={() => { setUserId(""); setAddDialogOpen(true); }}><Plus className="mr-1 h-3 w-3" /> Add Member</Button>}
+						<Button size="sm" onClick={() => onOpenChange(false)}>Close</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			<Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+				<DialogContent>
+					<DialogHeader><DialogTitle>Add Member</DialogTitle><DialogDescription>Enter the user ID to add to this team.</DialogDescription></DialogHeader>
+					<div className="space-y-2 py-2"><Label>User ID</Label><Input value={userId} onChange={(e) => setUserId(e.target.value)} placeholder="Enter user ID" /></div>
+					<DialogFooter><Button variant="outline" onClick={() => setAddDialogOpen(false)}>Cancel</Button><Button onClick={handleAssign} disabled={isSaving}>{isSaving ? "Adding..." : "Add"}</Button></DialogFooter>
+				</DialogContent>
+			</Dialog>
+		</>
+	);
+}
 
 // Helper to format reset duration for display
 const formatResetDuration = (duration: string) => {
@@ -50,6 +139,7 @@ interface TeamsTableProps {
 export default function TeamsTable({ teams, totalCount, customers, virtualKeys, search, debouncedSearch, onSearchChange, offset, limit, onOffsetChange }: TeamsTableProps) {
 	const [showTeamDialog, setShowTeamDialog] = useState(false);
 	const [editingTeam, setEditingTeam] = useState<Team | null>(null);
+	const [membersTeam, setMembersTeam] = useState<Team | null>(null);
 
 	const hasCreateAccess = useRbac(RbacResource.Teams, RbacOperation.Create);
 	const hasUpdateAccess = useRbac(RbacResource.Teams, RbacOperation.Update);
@@ -341,6 +431,16 @@ export default function TeamsTable({ teams, totalCount, customers, virtualKeys, 
 														variant="ghost"
 														size="icon"
 														className="h-8 w-8"
+														onClick={() => setMembersTeam(team)}
+														aria-label={`Members of team ${team.name}`}
+														data-testid={`team-members-btn-${team.name}`}
+													>
+														<Users className="h-4 w-4" />
+													</Button>
+													<Button
+														variant="ghost"
+														size="icon"
+														className="h-8 w-8"
 														onClick={() => handleEditTeam(team)}
 														disabled={!hasUpdateAccess}
 														aria-label={`Edit team ${team.name}`}
@@ -420,6 +520,15 @@ export default function TeamsTable({ teams, totalCount, customers, virtualKeys, 
 						</div>
 					)}
 				</div>
+
+				{membersTeam && (
+					<TeamMembersDialog
+						teamId={membersTeam.id}
+						teamName={membersTeam.name}
+						open={!!membersTeam}
+						onOpenChange={(open) => { if (!open) setMembersTeam(null); }}
+					/>
+				)}
 			</TooltipProvider>
 		</>
 	);

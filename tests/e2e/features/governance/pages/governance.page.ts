@@ -36,6 +36,10 @@ export class GovernancePage extends BasePage {
   readonly teamDialog: Locator
   readonly teamNameInput: Locator
 
+  // Users
+  readonly usersAddBtn: Locator
+  readonly usersTable: Locator
+
   // Customers
   readonly customersCreateBtn: Locator
   readonly customersTable: Locator
@@ -50,6 +54,9 @@ export class GovernancePage extends BasePage {
     this.teamDialog = page.getByTestId('team-dialog-content')
     this.teamNameInput = page.getByTestId('team-name-input')
 
+    this.usersAddBtn = page.getByTestId('user-button-add')
+    this.usersTable = page.getByTestId('users-table')
+
     this.customersCreateBtn = page.getByTestId('customer-button-create')
     this.customersTable = page.getByTestId('customer-table-container')
     this.customerDialog = page.getByTestId('customer-dialog-content')
@@ -63,6 +70,11 @@ export class GovernancePage extends BasePage {
 
   async gotoCustomers(): Promise<void> {
     await this.page.goto('/workspace/governance/customers')
+    await waitForNetworkIdle(this.page)
+  }
+
+  async gotoUsers(): Promise<void> {
+    await this.page.goto('/workspace/governance/users')
     await waitForNetworkIdle(this.page)
   }
 
@@ -132,6 +144,18 @@ export class GovernancePage extends BasePage {
       await this.teamDialog.getByRole('button', { name: /Cancel/i }).click()
       await expect(this.teamDialog).not.toBeVisible({ timeout: 10000 })
     }
+  }
+
+  getUserRow(email: string): Locator {
+    return this.page.getByTestId(`user-row-${email}`)
+  }
+
+  getUserEditButton(email: string): Locator {
+    return this.page.getByTestId(`user-edit-btn-${email}`)
+  }
+
+  getUserDeleteButton(email: string): Locator {
+    return this.page.getByTestId(`user-delete-btn-${email}`)
   }
 
   getCustomerRow(name: string): Locator {
