@@ -156,11 +156,6 @@ func (s *AuditStore) Record(ctx context.Context, userID, userEmail, action, reso
 	return s.db.WithContext(ctx).Create(entry).Error
 }
 
-// ClearAll deletes all audit logs.
-func (s *AuditStore) ClearAll(ctx context.Context) error {
-	return s.db.WithContext(ctx).Where("1 = 1").Delete(&TableAuditLog{}).Error
-}
-
 // RecentActivity returns the most recent audit log entries.
 func (s *AuditStore) RecentActivity(ctx context.Context, limit int) ([]TableAuditLog, error) {
 	if limit == 0 {

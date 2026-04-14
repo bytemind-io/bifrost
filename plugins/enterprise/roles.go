@@ -217,7 +217,7 @@ func (s *RoleStore) reloadCache() error {
 	for i := range roles {
 		r := &roles[i]
 		roleMap[r.ID] = r
-		nameMap[r.Name] = r
+		nameMap[strings.ToLower(r.Name)] = r
 		cache[r.ID] = make(map[Resource]map[Operation]bool)
 	}
 	for _, p := range perms {

@@ -60,7 +60,7 @@ func (s *UserStore) CreateUser(ctx context.Context, email, name, password, role 
 		Email:     email,
 		Name:      name,
 		Password:  string(hashedPassword),
-		Role:      string(role),
+		Role:      role,
 		TeamID:    teamID,
 		IsActive:  true,
 		CreatedAt: time.Now(),

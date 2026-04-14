@@ -233,7 +233,6 @@ func (h *EnterpriseHandler) RegisterRoutes(r *router.Router, middlewares ...sche
 	// Audit logs (both paths for backward compat + official docs)
 	r.GET("/api/enterprise/audit-logs", lib.ChainMiddlewares(h.queryAuditLogs, middlewares...))
 	r.GET("/api/audit-logs", lib.ChainMiddlewares(h.queryAuditLogs, middlewares...))
-	r.DELETE("/api/enterprise/audit-logs", lib.ChainMiddlewares(h.clearAuditLogs, middlewares...))
 	r.POST("/api/audit-logs/query", lib.ChainMiddlewares(h.advancedQueryAuditLogs, middlewares...))
 	r.GET("/api/enterprise/audit-logs/stats", lib.ChainMiddlewares(h.auditLogStats, middlewares...))
 }
@@ -809,6 +808,13 @@ func (h *EnterpriseHandler) getMyPermissions(ctx *fasthttp.RequestCtx) {
 // =====================
 
 func (h *EnterpriseHandler) queryAuditLogs(ctx *fasthttp.RequestCtx) {
+	// Audit logs are admin-only (immutable, compliance-critical)
+	_, _, role, _ := enterprise.ExtractUserFromContext(ctx)
+	if !strings.EqualFold(role, "Admin") && role != "" {
+		SendError(ctx, fasthttp.StatusForbidden, "Audit logs are restricted to administrators")
+		return
+	}
+
 	q := enterprise.AuditLogQuery{
 		EventType: string(ctx.QueryArgs().Peek("event_type")),
 		Action:    string(ctx.QueryArgs().Peek("action")),
@@ -845,6 +851,11 @@ func (h *EnterpriseHandler) queryAuditLogs(ctx *fasthttp.RequestCtx) {
 }
 
 func (h *EnterpriseHandler) advancedQueryAuditLogs(ctx *fasthttp.RequestCtx) {
+	_, _, role, _ := enterprise.ExtractUserFromContext(ctx)
+	if !strings.EqualFold(role, "Admin") && role != "" {
+		SendError(ctx, fasthttp.StatusForbidden, "Audit logs are restricted to administrators")
+		return
+	}
 	var body struct {
 		Filters struct {
 			EventTypes []string `json:"event_types"`
@@ -909,24 +920,15 @@ func (h *EnterpriseHandler) advancedQueryAuditLogs(ctx *fasthttp.RequestCtx) {
 }
 
 func (h *EnterpriseHandler) auditLogStats(ctx *fasthttp.RequestCtx) {
+	_, _, role, _ := enterprise.ExtractUserFromContext(ctx)
+	if !strings.EqualFold(role, "Admin") && role != "" {
+		SendError(ctx, fasthttp.StatusForbidden, "Audit logs are restricted to administrators")
+		return
+	}
 	stats, err := h.auditStore.Stats(ctx)
 	if err != nil {
 		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to get stats: %v", err))
 		return
 	}
 	SendJSON(ctx, stats)
-}
-
-func (h *EnterpriseHandler) clearAuditLogs(ctx *fasthttp.RequestCtx) {
-	_, _, role, _ := enterprise.ExtractUserFromContext(ctx)
-	if !strings.EqualFold(role, "Admin") {
-		SendError(ctx, fasthttp.StatusForbidden, "Only admin can clear audit logs")
-		return
-	}
-	if err := h.auditStore.ClearAll(ctx); err != nil {
-		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to clear audit logs: %v", err))
-		return
-	}
-	h.audit(ctx, "clear_audit_logs", "audit_logs", "", "")
-	SendJSON(ctx, map[string]string{"message": "Audit logs cleared"})
 }
