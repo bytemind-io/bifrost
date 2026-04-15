@@ -50,11 +50,11 @@ var APIRoutePermissions = []RoutePermission{
 	{Method: "PUT", Prefix: "/api/governance/teams/", Resource: ResourceVirtualKeys, Operation: OpUpdate},
 	{Method: "DELETE", Prefix: "/api/governance/teams/", Resource: ResourceVirtualKeys, Operation: OpDelete},
 
-	// Governance - Customers
+	// Governance - Customers (admin-level operations, use Settings resource)
 	{Method: "GET", Prefix: "/api/governance/customers", Resource: ResourceVirtualKeys, Operation: OpView},
-	{Method: "POST", Prefix: "/api/governance/customers", Resource: ResourceVirtualKeys, Operation: OpCreate},
-	{Method: "PUT", Prefix: "/api/governance/customers/", Resource: ResourceVirtualKeys, Operation: OpUpdate},
-	{Method: "DELETE", Prefix: "/api/governance/customers/", Resource: ResourceVirtualKeys, Operation: OpDelete},
+	{Method: "POST", Prefix: "/api/governance/customers", Resource: ResourceSettings, Operation: OpCreate},
+	{Method: "PUT", Prefix: "/api/governance/customers/", Resource: ResourceSettings, Operation: OpUpdate},
+	{Method: "DELETE", Prefix: "/api/governance/customers/", Resource: ResourceSettings, Operation: OpDelete},
 
 	// Governance - Budgets & rate limits
 	{Method: "GET", Prefix: "/api/governance/budgets", Resource: ResourceVirtualKeys, Operation: OpView},
