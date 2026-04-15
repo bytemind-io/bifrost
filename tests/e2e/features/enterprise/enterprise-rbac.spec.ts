@@ -2,13 +2,15 @@ import { test, expect } from '@playwright/test'
 
 const BASE = process.env.BIFROST_URL || 'http://localhost:8080'
 
-// Helper: login and return cookie header
+// Helper: login and return cookie header (extract just the token value)
 async function login(request: any, email: string, password: string): Promise<string> {
   const res = await request.post(`${BASE}/api/enterprise/login`, {
     data: { username: email, password },
   })
-  const cookies = res.headers()['set-cookie'] || ''
-  return cookies
+  const raw = res.headers()['set-cookie'] || ''
+  // Extract "token=xxx" from "token=xxx; Path=/; HttpOnly; ..."
+  const match = raw.match(/token=([^;]+)/)
+  return match ? `token=${match[1]}` : raw
 }
 
 // Helper: make authenticated request
@@ -36,10 +38,7 @@ test.describe('Enterprise RBAC E2E', () => {
 
   test.beforeAll(async ({ request }) => {
     // Login as admin
-    const res = await request.post(`${BASE}/api/enterprise/login`, {
-      data: { username: 'admin@bifrost.local', password: 'admin' },
-    })
-    adminCookie = res.headers()['set-cookie'] || ''
+    adminCookie = await login(request, 'admin@bifrost.local', 'admin')
     expect(adminCookie).toBeTruthy()
   })
 
@@ -83,14 +82,16 @@ test.describe('Enterprise RBAC E2E', () => {
   })
 
   test('admin: can create custom role and assign permissions', async ({ request }) => {
+    const roleName = `E2E-Auditor-${Date.now()}`
+
     // Create custom role
     const createRes = await authPost(request, '/api/roles', adminCookie, {
-      name: 'E2E-Auditor',
+      name: roleName,
       description: 'E2E test role',
     })
     expect(createRes.ok()).toBeTruthy()
     const role = await createRes.json()
-    expect(role.name).toBe('E2E-Auditor')
+    expect(role.name).toBe(roleName)
     expect(role.is_system).toBe(false)
 
     // Assign permissions
@@ -138,11 +139,7 @@ test.describe('Enterprise RBAC E2E', () => {
     expect(user.role).toBe('Developer')
 
     // Login as developer
-    const loginRes = await request.post(`${BASE}/api/enterprise/login`, {
-      data: { username: 'e2e-dev@test.com', password: 'testpass123' },
-    })
-    expect(loginRes.ok()).toBeTruthy()
-    const devCookie = loginRes.headers()['set-cookie'] || ''
+    const devCookie = await login(request, 'e2e-dev@test.com', 'testpass123')
 
     // Developer permissions should be limited
     const permRes = await authGet(request, '/api/enterprise/permissions', devCookie)
@@ -170,10 +167,7 @@ test.describe('Enterprise RBAC E2E', () => {
     if (!createRes.ok()) return
 
     const user = await createRes.json()
-    const loginRes = await request.post(`${BASE}/api/enterprise/login`, {
-      data: { username: 'e2e-viewer@test.com', password: 'testpass123' },
-    })
-    const viewerCookie = loginRes.headers()['set-cookie'] || ''
+    const viewerCookie = await login(request, 'e2e-viewer@test.com', 'testpass123')
 
     // Viewer can read VKs
     const vkRes = await authGet(request, '/api/governance/virtual-keys', viewerCookie)
@@ -281,10 +275,7 @@ test.describe('Enterprise RBAC E2E', () => {
     const dev = await devRes.json()
 
     // Login as developer
-    const loginRes = await request.post(`${BASE}/api/enterprise/login`, {
-      data: { username: 'e2e-scoped@test.com', password: 'testpass123' },
-    })
-    const devCookie = loginRes.headers()['set-cookie'] || ''
+    const devCookie = await login(request, 'e2e-scoped@test.com', 'testpass123')
 
     // Developer should only see team's VKs
     const vksRes = await authGet(request, '/api/governance/virtual-keys', devCookie)

@@ -60,7 +60,7 @@ cleanup-enterprise: ## Clean up enterprise directories if present
 	@if [ -d "ui/app/enterprise" ]; then rm -rf ui/app/enterprise; fi
 	@$(ECHO) "$(GREEN)Enterprise cleaned up$(NC)"
 
-install-ui: cleanup-enterprise
+install-ui: $(if $(CLEAN_ENTERPRISE),cleanup-enterprise,)
 	@which node > /dev/null || ($(ECHO) "$(RED)Error: Node.js is not installed. Please install Node.js first.$(NC)" && exit 1)
 	@which npm > /dev/null || ($(ECHO) "$(RED)Error: npm is not installed. Please install npm first.$(NC)" && exit 1)
 	@$(ECHO) "$(GREEN)Node.js and npm are installed$(NC)"
@@ -184,14 +184,14 @@ build: build-ui ## Build bifrost-http binary
 	if [ "$$TARGET_OS" = "linux" ] && [ "$$HOST_OS" = "linux" ]; then \
 		if [ -n "$(DYNAMIC)" ]; then \
 			$(ECHO) "$(CYAN)Building for $$TARGET_OS/$$TARGET_ARCH with dynamic linking...$(NC)"; \
-			cd transports/bifrost-http && CGO_ENABLED=1 GOOS=$$TARGET_OS GOARCH=$$TARGET_ARCH $(if $(LOCAL),,GOWORK=off) go build \
+			cd transports/bifrost-http && CGO_ENABLED=1 GOOS=$$TARGET_OS GOARCH=$$TARGET_ARCH $(if $(OPEN_SOURCE),GOWORK=off,) go build \
 				-ldflags="-w -s -X main.Version=v$(VERSION)" \
 				-a -trimpath \
 				-o ../../tmp/bifrost-http \
 				.; \
 		else \
 			$(ECHO) "$(CYAN)Building for $$TARGET_OS/$$TARGET_ARCH with static linking...$(NC)"; \
-			cd transports/bifrost-http && CGO_ENABLED=1 GOOS=$$TARGET_OS GOARCH=$$TARGET_ARCH $(if $(LOCAL),,GOWORK=off) go build \
+			cd transports/bifrost-http && CGO_ENABLED=1 GOOS=$$TARGET_OS GOARCH=$$TARGET_ARCH $(if $(OPEN_SOURCE),GOWORK=off,) go build \
 				-ldflags="-w -s -extldflags "-static" -X main.Version=v$(VERSION)" \
 				-a -trimpath \
 				-tags "sqlite_static" \
@@ -201,7 +201,7 @@ build: build-ui ## Build bifrost-http binary
 		$(ECHO) "$(GREEN)Built: tmp/bifrost-http (version: v$(VERSION))$(NC)"; \
 	elif [ "$$TARGET_OS" = "$$HOST_OS" ] && [ "$$TARGET_ARCH" = "$$HOST_ARCH" ]; then \
 		$(ECHO) "$(CYAN)Building for $$TARGET_OS/$$TARGET_ARCH (native build with CGO)...$(NC)"; \
-		cd transports/bifrost-http && CGO_ENABLED=1 GOOS=$$TARGET_OS GOARCH=$$TARGET_ARCH $(if $(LOCAL),,GOWORK=off) go build \
+		cd transports/bifrost-http && CGO_ENABLED=1 GOOS=$$TARGET_OS GOARCH=$$TARGET_ARCH $(if $(OPEN_SOURCE),GOWORK=off,) go build \
 			-ldflags="-w -s -X main.Version=v$(VERSION)" \
 			-a -trimpath \
 			-tags "sqlite_static" \
@@ -217,7 +217,7 @@ build: build-ui ## Build bifrost-http binary
 build-cli: ## Build bifrost CLI binary
 	@$(ECHO) "$(GREEN)Building bifrost CLI...$(NC)"
 	@mkdir -p ./tmp
-	@cd cli && $(if $(LOCAL),,GOWORK=off) go build -ldflags "-X main.version=v0.1.1-dev" -o ../tmp/bifrost .
+	@cd cli && $(if $(OPEN_SOURCE),GOWORK=off,) go build -ldflags "-X main.version=v0.1.1-dev" -o ../tmp/bifrost .
 	@$(ECHO) "$(GREEN)Built: tmp/bifrost$(NC)"
 
 _build-with-docker: # Internal target for Docker-based cross-compilation
@@ -1369,7 +1369,7 @@ mod-tidy: ## Run go mod tidy on modules (Usage: make mod-tidy [MODULE=all|cli|co
 	@$(ECHO) "$(GREEN)Running go mod tidy...$(NC)"
 	@if [ "$(MODULE)" = "all" ] || [ "$(MODULE)" = "cli" ]; then \
 		$(ECHO) "$(CYAN)Tidying cli...$(NC)"; \
-		cd cli && $(if $(LOCAL),,GOWORK=off) go mod tidy && $(ECHO) "$(GREEN)  ✓ cli$(NC)"; \
+		cd cli && $(if $(OPEN_SOURCE),GOWORK=off,) go mod tidy && $(ECHO) "$(GREEN)  ✓ cli$(NC)"; \
 	fi
 	@if [ "$(MODULE)" = "all" ] || [ "$(MODULE)" = "core" ]; then \
 		$(ECHO) "$(CYAN)Tidying core...$(NC)"; \

@@ -9,9 +9,9 @@ private.*
 bifrost-data
 test-coverage-local.sh
 
-# Enterprise
-ui/app/enterprise
-ui/components/enterprise
+# Enterprise (kept in git for enterprise edition)
+# ui/app/enterprise
+# ui/components/enterprise
 
 # Temporary directories
 **/temp/
