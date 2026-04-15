@@ -49,9 +49,9 @@ func (h *EnterpriseHandler) GetRoleStore() *enterprise.RoleStore {
 
 // audit emits a configuration_change audit event (most common type).
 func (h *EnterpriseHandler) audit(ctx *fasthttp.RequestCtx, action, resource, resourceID, details string) {
-	userID, userEmail, _, _ := enterprise.ExtractUserFromContext(ctx)
-	if userEmail == "" {
-		userEmail = "admin"
+	userID, userEmail, role, _ := enterprise.ExtractUserFromContext(ctx)
+	if userEmail == "" && role != "" {
+		userEmail = role // legacy admin: use role name as identifier
 	}
 	h.auditStore.Emit(enterprise.AuditEvent{
 		EventType:  enterprise.EventTypeConfigurationChange,
@@ -82,65 +82,96 @@ func (h *EnterpriseHandler) auditAuth(ctx *fasthttp.RequestCtx, action, status, 
 }
 
 // RBACMiddleware returns a middleware that enforces role-based access control.
-// It resolves the enterprise user from the session token hash or API key,
-// injects user info into the request context, and checks route permissions.
 func (h *EnterpriseHandler) RBACMiddleware() schemas.BifrostHTTPMiddleware {
 	return func(next fasthttp.RequestHandler) fasthttp.RequestHandler {
 		return func(ctx *fasthttp.RequestCtx) {
 			path := string(ctx.Path())
-
-			// Skip RBAC for whitelisted paths
-			if path == "/health" ||
-				strings.HasPrefix(path, "/api/session/") ||
-				strings.HasPrefix(path, "/api/enterprise/login") {
-				next(ctx)
-				return
-			}
-
-			sessionToken, _ := ctx.UserValue(schemas.BifrostContextKeySessionToken).(string)
-
-			// No session token means auth is disabled or request was whitelisted
-			if sessionToken == "" {
-				next(ctx)
-				return
-			}
-
-			// Look up enterprise user by session token hash
-			tokenHash := encrypt.HashSHA256(sessionToken)
-			user, err := h.userStore.GetUserByTokenHash(ctx, tokenHash)
-			if err != nil {
-				// No enterprise user mapping — this is a legacy admin session
-				// (logged in via config-based admin credentials). Grant admin role.
-				ctx.SetUserValue(enterprise.CtxKeyUserRole, "Admin")
-			} else {
-				// Enterprise user found — inject user info into context
-				ctx.SetUserValue(enterprise.CtxKeyUserID, user.ID)
-				ctx.SetUserValue(enterprise.CtxKeyUserEmail, user.Email)
-				ctx.SetUserValue(enterprise.CtxKeyUserRole, user.Role)
-				ctx.SetUserValue(enterprise.CtxKeyUserTeamID, user.TeamID)
-			}
-
-			// Check route permission
 			method := string(ctx.Method())
-			roleName := "Admin"
-			if roleStr, ok := ctx.UserValue(enterprise.CtxKeyUserRole).(string); ok {
-				roleName = roleStr
+
+			// Step 1: Resolve user identity from session token (always, regardless of path)
+			h.resolveUser(ctx)
+
+			// Step 2: Check if this path needs RBAC enforcement
+			if h.isWhitelisted(path, method) {
+				next(ctx)
+				h.auditMutation(ctx, method, path)
+				return
 			}
 
+			// Step 3: Enforce route permission
+			roleName, _ := ctx.UserValue(enterprise.CtxKeyUserRole).(string)
 			if !enterprise.CheckRoutePermission(h.roleStore, roleName, method, path) {
 				SendError(ctx, fasthttp.StatusForbidden, "Insufficient permissions")
 				return
 			}
 
 			next(ctx)
-
-			// Audit logging: record successful governance mutations (POST/PUT/DELETE)
-			if (method == "POST" || method == "PUT" || method == "DELETE") &&
-				ctx.Response.StatusCode() >= 200 && ctx.Response.StatusCode() < 300 {
-				h.recordGovernanceAudit(ctx, method, path)
-			}
+			h.auditMutation(ctx, method, path)
 		}
 	}
+}
+
+// resolveUser extracts session token and resolves the enterprise user or legacy admin.
+func (h *EnterpriseHandler) resolveUser(ctx *fasthttp.RequestCtx) {
+	sessionToken, _ := ctx.UserValue(schemas.BifrostContextKeySessionToken).(string)
+	if sessionToken == "" {
+		return
+	}
+
+	// Try enterprise user first
+	tokenHash := encrypt.HashSHA256(sessionToken)
+	user, err := h.userStore.GetUserByTokenHash(ctx, tokenHash)
+	if err == nil {
+		ctx.SetUserValue(enterprise.CtxKeyUserID, user.ID)
+		ctx.SetUserValue(enterprise.CtxKeyUserEmail, user.Email)
+		ctx.SetUserValue(enterprise.CtxKeyUserRole, user.Role)
+		ctx.SetUserValue(enterprise.CtxKeyUserTeamID, user.TeamID)
+		return
+	}
+
+	// Fallback: check if it's a valid, non-expired config-store session (legacy admin)
+	session, sessErr := h.configStore.GetSession(ctx, sessionToken)
+	if sessErr == nil && session != nil && session.ExpiresAt.After(time.Now()) {
+		ctx.SetUserValue(enterprise.CtxKeyUserRole, "Admin")
+	}
+}
+
+// isWhitelisted returns true for paths that skip RBAC enforcement.
+// User context is still resolved — only permission checking is skipped.
+func (h *EnterpriseHandler) isWhitelisted(path, method string) bool {
+	if path == "/health" {
+		return true
+	}
+	whitelisted := []string{
+		"/api/session/",
+		"/api/enterprise/login",
+		"/api/enterprise/logout",
+		"/api/enterprise/permissions",
+		"/api/enterprise/me",
+		"/api/version",
+		"/ws",
+	}
+	for _, w := range whitelisted {
+		if strings.HasPrefix(path, w) {
+			return true
+		}
+	}
+	// GET /api/config is public; PUT /api/config requires RBAC
+	if strings.HasPrefix(path, "/api/config") && method == "GET" {
+		return true
+	}
+	return false
+}
+
+// auditMutation records audit events for successful write operations.
+func (h *EnterpriseHandler) auditMutation(ctx *fasthttp.RequestCtx, method, path string) {
+	if method != "POST" && method != "PUT" && method != "DELETE" {
+		return
+	}
+	if ctx.Response.StatusCode() < 200 || ctx.Response.StatusCode() >= 300 {
+		return
+	}
+	h.recordGovernanceAudit(ctx, method, path)
 }
 
 // recordGovernanceAudit records audit logs for governance CRUD operations.
@@ -150,9 +181,9 @@ func (h *EnterpriseHandler) recordGovernanceAudit(ctx *fasthttp.RequestCtx, meth
 		return
 	}
 
-	userID, userEmail, _, _ := enterprise.ExtractUserFromContext(ctx)
-	if userEmail == "" {
-		userEmail = "admin" // legacy admin session
+	userID, userEmail, role, _ := enterprise.ExtractUserFromContext(ctx)
+	if userEmail == "" && role != "" {
+		userEmail = role
 	}
 
 	// Derive action from HTTP method
@@ -792,7 +823,18 @@ func (h *EnterpriseHandler) setRolePermissions(ctx *fasthttp.RequestCtx) {
 }
 
 func (h *EnterpriseHandler) getMyPermissions(ctx *fasthttp.RequestCtx) {
-	_, _, role, teamID := enterprise.ExtractUserFromContext(ctx)
+	userID, _, role, teamID := enterprise.ExtractUserFromContext(ctx)
+
+	// No user context = not logged in, return empty permissions
+	if userID == "" && role == "" {
+		SendJSON(ctx, map[string]interface{}{
+			"role":        "",
+			"permissions": map[string]interface{}{},
+			"team_id":     nil,
+		})
+		return
+	}
+	// Legacy admin (config-based auth, no enterprise user)
 	if role == "" {
 		role = "Admin"
 	}

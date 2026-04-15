@@ -426,7 +426,7 @@ export default function TeamsTable({ teams, totalCount, customers, virtualKeys, 
 												)}
 											</TableCell>
 											<TableCell className="text-right">
-												<div className="flex items-center justify-end gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+												<div className="flex items-center justify-end gap-1">
 													<Button
 														variant="ghost"
 														size="icon"
@@ -453,7 +453,7 @@ export default function TeamsTable({ teams, totalCount, customers, virtualKeys, 
 															<Button
 																variant="ghost"
 																size="icon"
-																className="h-8 w-8 text-red-500 hover:bg-red-500/10 hover:text-red-500"
+																className="h-8 w-8"
 																disabled={!hasDeleteAccess}
 																aria-label={`Delete team ${team.name}`}
 																data-testid={`team-delete-btn-${team.name}`}
@@ -474,7 +474,6 @@ export default function TeamsTable({ teams, totalCount, customers, virtualKeys, 
 																<AlertDialogAction
 																	onClick={() => handleDelete(team.id)}
 																	disabled={isDeleting}
-																	className="bg-red-600 hover:bg-red-700"
 																>
 																	{isDeleting ? "Deleting..." : "Delete"}
 																</AlertDialogAction>

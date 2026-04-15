@@ -355,7 +355,7 @@ export default function CustomersTable({ customers, totalCount, teams, virtualKe
 												)}
 											</TableCell>
 											<TableCell className="text-right">
-												<div className="flex items-center justify-end gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+												<div className="flex items-center justify-end gap-1">
 													<Button
 														variant="ghost"
 														size="icon"
@@ -372,7 +372,7 @@ export default function CustomersTable({ customers, totalCount, teams, virtualKe
 															<Button
 																variant="ghost"
 																size="icon"
-																className="h-8 w-8 text-red-500 hover:bg-red-500/10 hover:text-red-500"
+																className="h-8 w-8"
 																disabled={!hasDeleteAccess}
 																aria-label={`Delete customer ${customer.name}`}
 																data-testid={`customer-button-delete-${customer.id}`}
@@ -394,7 +394,6 @@ export default function CustomersTable({ customers, totalCount, teams, virtualKe
 																	data-testid="customer-button-delete-confirm"
 																	onClick={() => handleDelete(customer.id)}
 																	disabled={isDeleting}
-																	className="bg-red-600 hover:bg-red-700"
 																>
 																	{isDeleting ? "Deleting..." : "Delete"}
 																</AlertDialogAction>

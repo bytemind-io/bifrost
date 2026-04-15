@@ -1162,7 +1162,17 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 		}
 		if userStore != nil && auditStore != nil && roleStore != nil {
 			s.EnterpriseHandler = handlers.NewEnterpriseHandler(userStore, auditStore, roleStore, s.Config.ConfigStore)
-			if seedErr := userStore.EnsureAdminExists(ctx, "admin@bifrost.local", "Admin", "admin"); seedErr != nil {
+			// Seed default admin from env or fallback to dev defaults
+			adminEmail := os.Getenv("BIFROST_ADMIN_EMAIL")
+			adminPassword := os.Getenv("BIFROST_ADMIN_PASSWORD")
+			if adminEmail == "" {
+				adminEmail = "admin@bifrost.local"
+			}
+			if adminPassword == "" {
+				adminPassword = "admin"
+				logger.Warn("using default admin password; set BIFROST_ADMIN_EMAIL and BIFROST_ADMIN_PASSWORD for production")
+			}
+			if seedErr := userStore.EnsureAdminExists(ctx, adminEmail, "Admin", adminPassword); seedErr != nil {
 				logger.Warn("failed to seed default admin user: %v", seedErr)
 			}
 			logger.Info("enterprise module initialized (users, audit logs, roles)")

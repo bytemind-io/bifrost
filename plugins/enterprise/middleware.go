@@ -30,8 +30,15 @@ var APIRoutePermissions = []RoutePermission{
 	{Method: "PUT", Prefix: "/api/enterprise/users/", Resource: ResourceUsers, Operation: OpUpdate},
 	{Method: "DELETE", Prefix: "/api/enterprise/users/", Resource: ResourceUsers, Operation: OpDelete},
 
+	// Roles management (admin-level)
+	{Method: "POST", Prefix: "/api/roles", Resource: ResourceUsers, Operation: OpCreate},
+	{Method: "PUT", Prefix: "/api/roles/", Resource: ResourceUsers, Operation: OpUpdate},
+	{Method: "DELETE", Prefix: "/api/roles/", Resource: ResourceUsers, Operation: OpDelete},
+
 	// Audit logs
 	{Method: "GET", Prefix: "/api/enterprise/audit-logs", Resource: ResourceAuditLogs, Operation: OpView},
+	{Method: "GET", Prefix: "/api/audit-logs", Resource: ResourceAuditLogs, Operation: OpView},
+	{Method: "POST", Prefix: "/api/audit-logs/query", Resource: ResourceAuditLogs, Operation: OpView},
 
 	// Team member management
 	{Method: "GET", Prefix: "/api/enterprise/teams/", Resource: ResourceUsers, Operation: OpView},
@@ -127,6 +134,10 @@ var APIRoutePermissions = []RoutePermission{
 // CheckRoutePermission checks if a role has permission for the given HTTP method + path.
 // Uses the RoleStore for dynamic permission lookup.
 func CheckRoutePermission(roleStore *RoleStore, roleName string, method, path string) bool {
+	// No role = not authenticated, deny all except whitelisted
+	if roleName == "" {
+		return false
+	}
 	// Admin always allowed (fast path, case-insensitive for backward compat)
 	if strings.EqualFold(roleName, "Admin") {
 		return true
@@ -137,7 +148,6 @@ func CheckRoutePermission(roleStore *RoleStore, roleName string, method, path st
 		"/api/session/",
 		"/api/enterprise/login",
 		"/api/enterprise/logout",
-		"/api/enterprise/roles",
 		"/api/enterprise/permissions",
 		"/api/enterprise/me",
 		"/api/config",
@@ -148,6 +158,16 @@ func CheckRoutePermission(roleStore *RoleStore, roleName string, method, path st
 	for _, w := range whitelisted {
 		if strings.HasPrefix(path, w) || path == w {
 			return true
+		}
+	}
+
+	// GET-only public endpoints (any authenticated user can read)
+	if method == "GET" {
+		readOnlyPublic := []string{"/api/roles", "/api/enterprise/roles"}
+		for _, p := range readOnlyPublic {
+			if strings.HasPrefix(path, p) {
+				return true
+			}
 		}
 	}
 
