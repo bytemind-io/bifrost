@@ -1518,7 +1518,7 @@ func (request *BedrockConverseRequest) ToBifrostResponsesRequest(ctx *schemas.Bi
 						} else if maxTokens, ok := schemas.SafeExtractInt(reasoningConfigMap["budget_tokens"]); ok {
 							// Fallback: convert budget_tokens to effort
 							minBudgetTokens := 0
-							defaultMaxTokens := DefaultCompletionMaxTokens
+							defaultMaxTokens := providerUtils.GetMaxOutputTokensOrDefault(bifrostReq.Model, DefaultCompletionMaxTokens)
 							if request.InferenceConfig != nil && request.InferenceConfig.MaxTokens != nil {
 								defaultMaxTokens = *request.InferenceConfig.MaxTokens
 							}
@@ -1707,11 +1707,12 @@ func ToBedrockResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.
 					})
 				} else if schemas.IsNovaModel(bifrostReq.Model) {
 					minBudgetTokens := MinimumReasoningMaxTokens
-					defaultMaxTokens := DefaultCompletionMaxTokens
+					modelDefaultMaxTokens := providerUtils.GetMaxOutputTokensOrDefault(bifrostReq.Model, DefaultCompletionMaxTokens)
+					defaultMaxTokens := modelDefaultMaxTokens
 					if inferenceConfig.MaxTokens != nil {
 						defaultMaxTokens = *inferenceConfig.MaxTokens
 					} else {
-						inferenceConfig.MaxTokens = schemas.Ptr(DefaultCompletionMaxTokens)
+						inferenceConfig.MaxTokens = schemas.Ptr(modelDefaultMaxTokens)
 					}
 					maxReasoningEffort := providerUtils.GetReasoningEffortFromBudgetTokens(tokenBudget, minBudgetTokens, defaultMaxTokens)
 					typeStr := "enabled"
@@ -1774,11 +1775,12 @@ func ToBedrockResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.
 							})
 						} else {
 							// Opus 4.5 and older Anthropic models: budget_tokens thinking
-							defaultMaxTokens := DefaultCompletionMaxTokens
+							modelDefaultMaxTokens := providerUtils.GetMaxOutputTokensOrDefault(bifrostReq.Model, DefaultCompletionMaxTokens)
+							defaultMaxTokens := modelDefaultMaxTokens
 							if inferenceConfig.MaxTokens != nil {
 								defaultMaxTokens = *inferenceConfig.MaxTokens
 							} else {
-								inferenceConfig.MaxTokens = schemas.Ptr(DefaultCompletionMaxTokens)
+								inferenceConfig.MaxTokens = schemas.Ptr(modelDefaultMaxTokens)
 							}
 							budgetTokens, err := providerUtils.GetBudgetTokensFromReasoningEffort(*bifrostReq.Params.Reasoning.Effort, anthropic.MinimumReasoningMaxTokens, defaultMaxTokens)
 							if err != nil {
@@ -1792,11 +1794,12 @@ func ToBedrockResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.
 					} else {
 						// Non-Anthropic, non-Nova models: budget_tokens only
 						minBudgetTokens := MinimumReasoningMaxTokens
-						defaultMaxTokens := DefaultCompletionMaxTokens
+						modelDefaultMaxTokens := providerUtils.GetMaxOutputTokensOrDefault(bifrostReq.Model, DefaultCompletionMaxTokens)
+						defaultMaxTokens := modelDefaultMaxTokens
 						if inferenceConfig.MaxTokens != nil {
 							defaultMaxTokens = *inferenceConfig.MaxTokens
 						} else {
-							inferenceConfig.MaxTokens = schemas.Ptr(DefaultCompletionMaxTokens)
+							inferenceConfig.MaxTokens = schemas.Ptr(modelDefaultMaxTokens)
 						}
 						budgetTokens, err := providerUtils.GetBudgetTokensFromReasoningEffort(*bifrostReq.Params.Reasoning.Effort, minBudgetTokens, defaultMaxTokens)
 						if err != nil {
@@ -2199,7 +2202,11 @@ func convertResponsesToolChoice(toolChoice schemas.ResponsesToolChoice) *Bedrock
 			}
 			// If Name is nil or empty, return nil as we can't construct a valid tool choice
 			return nil
-		case schemas.ResponsesToolChoiceTypeAuto, schemas.ResponsesToolChoiceTypeAny, schemas.ResponsesToolChoiceTypeRequired:
+		case schemas.ResponsesToolChoiceTypeAuto:
+			return &BedrockToolChoice{
+				Auto: &BedrockToolChoiceAuto{},
+			}
+		case schemas.ResponsesToolChoiceTypeAny, schemas.ResponsesToolChoiceTypeRequired:
 			return &BedrockToolChoice{
 				Any: &BedrockToolChoiceAny{},
 			}
@@ -2558,6 +2565,18 @@ func ConvertBifrostMessagesToBedrockMessages(bifrostMessages []schemas.Responses
 						for _, block := range msg.ResponsesToolMessage.Output.ResponsesFunctionToolCallOutputBlocks {
 							if block.Text != nil {
 								resultContent = append(resultContent, tryParseJSONIntoContentBlock(*block.Text))
+							} else if block.Type == schemas.ResponsesInputMessageContentBlockTypeImage &&
+								block.ResponsesInputMessageContentBlockImage != nil &&
+								block.ResponsesInputMessageContentBlockImage.ImageURL != nil {
+								imageSource, err := convertImageToBedrockSource(*block.ResponsesInputMessageContentBlockImage.ImageURL)
+								if err != nil {
+									// Bedrock only supports base64 data URIs for images. If conversion
+									// fails (e.g. remote URL), the image is dropped from the tool result
+									// which silently degrades the model's ability to see tool output.
+									_ = fmt.Errorf("bedrock: converting tool result image: %w", err)
+								} else {
+									resultContent = append(resultContent, BedrockContentBlock{Image: imageSource})
+								}
 							}
 						}
 					}

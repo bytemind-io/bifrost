@@ -104,14 +104,15 @@ func convertChatParameters(ctx *schemas.BifrostContext, bifrostReq *schemas.Bifr
 				})
 			} else if schemas.IsNovaModel(bifrostReq.Model) {
 				minBudgetTokens := MinimumReasoningMaxTokens
-				defaultMaxTokens := DefaultCompletionMaxTokens
+				modelDefaultMaxTokens := providerUtils.GetMaxOutputTokensOrDefault(bifrostReq.Model, DefaultCompletionMaxTokens)
+				defaultMaxTokens := modelDefaultMaxTokens
 				if bedrockReq.InferenceConfig != nil && bedrockReq.InferenceConfig.MaxTokens != nil {
 					defaultMaxTokens = *bedrockReq.InferenceConfig.MaxTokens
 				} else if bedrockReq.InferenceConfig != nil {
-					bedrockReq.InferenceConfig.MaxTokens = schemas.Ptr(DefaultCompletionMaxTokens)
+					bedrockReq.InferenceConfig.MaxTokens = schemas.Ptr(modelDefaultMaxTokens)
 				} else {
 					bedrockReq.InferenceConfig = &BedrockInferenceConfig{
-						MaxTokens: schemas.Ptr(DefaultCompletionMaxTokens),
+						MaxTokens: schemas.Ptr(modelDefaultMaxTokens),
 					}
 				}
 
@@ -145,15 +146,16 @@ func convertChatParameters(ctx *schemas.BifrostContext, bifrostReq *schemas.Bifr
 				})
 			}
 		} else if bifrostReq.Params.Reasoning.Effort != nil && *bifrostReq.Params.Reasoning.Effort != "none" {
-			maxTokens := DefaultCompletionMaxTokens
+			modelDefaultMaxTokens := providerUtils.GetMaxOutputTokensOrDefault(bifrostReq.Model, DefaultCompletionMaxTokens)
+			maxTokens := modelDefaultMaxTokens
 			if bedrockReq.InferenceConfig != nil && bedrockReq.InferenceConfig.MaxTokens != nil {
 				maxTokens = *bedrockReq.InferenceConfig.MaxTokens
 			} else {
 				if bedrockReq.InferenceConfig != nil {
-					bedrockReq.InferenceConfig.MaxTokens = schemas.Ptr(DefaultCompletionMaxTokens)
+					bedrockReq.InferenceConfig.MaxTokens = schemas.Ptr(modelDefaultMaxTokens)
 				} else {
 					bedrockReq.InferenceConfig = &BedrockInferenceConfig{
-						MaxTokens: schemas.Ptr(DefaultCompletionMaxTokens),
+						MaxTokens: schemas.Ptr(modelDefaultMaxTokens),
 					}
 				}
 			}
@@ -1139,12 +1141,17 @@ func convertToolCallToContentBlock(toolCall schemas.ChatAssistantMessageToolCall
 	// Using json.RawMessage avoids the map[string]interface{} round-trip
 	// that would destroy key order.
 	var input json.RawMessage
-	var buf bytes.Buffer
-	if err := json.Compact(&buf, []byte(toolCall.Function.Arguments)); err == nil {
-		input = buf.Bytes()
+	args := strings.TrimSpace(toolCall.Function.Arguments)
+	if args == "" {
+		input = json.RawMessage("{}")
 	} else {
-		// Preserve original payload instead of silently dropping args.
-		input = json.RawMessage([]byte(toolCall.Function.Arguments))
+		var buf bytes.Buffer
+		if err := json.Compact(&buf, []byte(args)); err == nil {
+			input = buf.Bytes()
+		} else {
+			// Preserve original payload instead of silently dropping args.
+			input = json.RawMessage([]byte(args))
+		}
 	}
 
 	return BedrockContentBlock{

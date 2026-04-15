@@ -3,6 +3,7 @@ package schemas
 import (
 	"bytes"
 	"fmt"
+	"time"
 )
 
 // BifrostChatRequest is the request struct for chat completion requests
@@ -44,6 +45,22 @@ type BifrostChatResponse struct {
 	SearchResults []SearchResult `json:"search_results,omitempty"`
 	Videos        []VideoResult  `json:"videos,omitempty"`
 	Citations     []string       `json:"citations,omitempty"`
+}
+
+// BackfillParams populates response fields from the request that are needed
+func (cr *BifrostChatResponse) BackfillParams(request *BifrostChatRequest) {
+	if cr == nil || request == nil {
+		return
+	}
+	if cr.Model == "" {
+		cr.Model = request.Model
+	}
+	if cr.Object == "" {
+		cr.Object = "chat.completion"
+	}
+	if cr.Created == 0 {
+		cr.Created = int(time.Now().Unix())
+	}
 }
 
 // ToTextCompletionResponse converts a BifrostChatResponse to a BifrostTextCompletionResponse
@@ -361,20 +378,24 @@ type ToolFunctionParameters struct {
 	// keyOrder preserves the JSON key order from the original input so that
 	// MarshalJSON can emit keys in the same order the client sent them.
 	keyOrder JSONKeyOrder `json:"-"`
+	// explicitEmptyObject tracks a client-supplied raw {} schema.
+	explicitEmptyObject bool `json:"-"`
 }
 
-// MarshalJSON serializes ToolFunctionParameters to JSON, preserving the original key
-// order from the input JSON. If no original order was captured (programmatic construction),
-// it falls back to the default struct field declaration order.
-// Properties is always emitted as an object, never null.
+// MarshalJSON serializes ToolFunctionParameters while preserving the original
+// top-level key order when available. A client-supplied raw `{}` stays `{}`;
+// otherwise object schemas always emit `properties` as an object, never null.
 func (t ToolFunctionParameters) MarshalJSON() ([]byte, error) {
+	if t.explicitEmptyObject && !t.hasDefinedSchemaFields() {
+		return []byte("{}"), nil
+	}
 	if t.Properties == nil {
 		// Initialize with an empty map (not nil values) so it marshals to {} instead of null
 		// Required by OpenAI and JSON Schema spec
 		t.Properties = &OrderedMap{values: make(map[string]interface{})}
 	}
 	type Alias ToolFunctionParameters
-	data, err := Marshal(Alias(t))
+	data, err := MarshalSorted(Alias(t))
 	if err != nil {
 		return nil, err
 	}
@@ -383,14 +404,14 @@ func (t ToolFunctionParameters) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements custom JSON unmarshalling for ToolFunctionParameters.
 // It handles both JSON object format (standard) and JSON string format (used by some providers like xAI).
-// It captures the original key order for order-preserving re-serialization.
+// It captures the original key order for order-preserving re-serialization and
+// records whether the client provided an explicit empty object schema.
 func (t *ToolFunctionParameters) UnmarshalJSON(data []byte) error {
 	// Try to unmarshal as a JSON string first (xAI sends parameters as a string)
 	var jsonStr string
 	if err := Unmarshal(data, &jsonStr); err == nil {
 		data = []byte(jsonStr)
 	}
-
 	type Alias ToolFunctionParameters
 	var temp Alias
 	if err := Unmarshal(data, &temp); err != nil {
@@ -405,6 +426,13 @@ func (t *ToolFunctionParameters) UnmarshalJSON(data []byte) error {
 		t.AdditionalProperties = nil
 	}
 
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) >= 2 && trimmed[0] == '{' && trimmed[len(trimmed)-1] == '}' {
+		inner := bytes.TrimSpace(trimmed[1 : len(trimmed)-1])
+		t.explicitEmptyObject = len(inner) == 0
+	} else {
+		t.explicitEmptyObject = false
+	}
 	t.keyOrder.Capture(data)
 	return nil
 }
@@ -479,6 +507,34 @@ func (t *ToolFunctionParameters) Normalized() *ToolFunctionParameters {
 	return &out
 }
 
+// hasDefinedSchemaFields reports whether the schema contains any real JSON Schema
+// fields, allowing MarshalJSON to distinguish an explicit raw `{}` from a
+// populated object schema such as `{"type":"object","properties":{}}`.
+func (t *ToolFunctionParameters) hasDefinedSchemaFields() bool {
+	if t == nil {
+		return false
+	}
+	if t.Type != "" || t.Description != nil || len(t.Required) > 0 || t.AdditionalProperties != nil || len(t.Enum) > 0 {
+		return true
+	}
+	if t.Properties != nil || t.Defs != nil || t.Definitions != nil || t.Ref != nil {
+		return true
+	}
+	if t.Items != nil || t.MinItems != nil || t.MaxItems != nil {
+		return true
+	}
+	if len(t.AnyOf) > 0 || len(t.OneOf) > 0 || len(t.AllOf) > 0 {
+		return true
+	}
+	if t.Format != nil || t.Pattern != nil || t.MinLength != nil || t.MaxLength != nil {
+		return true
+	}
+	if t.Minimum != nil || t.Maximum != nil {
+		return true
+	}
+	return t.Title != nil || t.Default != nil || t.Nullable != nil
+}
+
 type AdditionalPropertiesStruct struct {
 	AdditionalPropertiesBool *bool
 	AdditionalPropertiesMap  *OrderedMap
@@ -495,12 +551,12 @@ func (a AdditionalPropertiesStruct) MarshalJSON() ([]byte, error) {
 
 	// If bool is set, marshal as boolean
 	if a.AdditionalPropertiesBool != nil {
-		return Marshal(*a.AdditionalPropertiesBool)
+		return MarshalSorted(*a.AdditionalPropertiesBool)
 	}
 
 	// If map is set, marshal as object
 	if a.AdditionalPropertiesMap != nil {
-		return Marshal(a.AdditionalPropertiesMap)
+		return MarshalSorted(a.AdditionalPropertiesMap)
 	}
 
 	// If both are nil, return null
@@ -586,7 +642,7 @@ func (s ChatToolChoiceStruct) MarshalJSON() ([]byte, error) {
 	buf.WriteByte('{')
 
 	// Always emit "type" first
-	typeBytes, err := Marshal(string(s.Type))
+	typeBytes, err := MarshalSorted(string(s.Type))
 	if err != nil {
 		return nil, err
 	}
@@ -596,7 +652,7 @@ func (s ChatToolChoiceStruct) MarshalJSON() ([]byte, error) {
 	switch s.Type {
 	case ChatToolChoiceTypeFunction:
 		if s.Function != nil {
-			funcBytes, err := Marshal(s.Function)
+			funcBytes, err := MarshalSorted(s.Function)
 			if err != nil {
 				return nil, err
 			}
@@ -605,7 +661,7 @@ func (s ChatToolChoiceStruct) MarshalJSON() ([]byte, error) {
 		}
 	case ChatToolChoiceTypeCustom:
 		if s.Custom != nil {
-			customBytes, err := Marshal(s.Custom)
+			customBytes, err := MarshalSorted(s.Custom)
 			if err != nil {
 				return nil, err
 			}
@@ -614,7 +670,7 @@ func (s ChatToolChoiceStruct) MarshalJSON() ([]byte, error) {
 		}
 	case ChatToolChoiceTypeAllowedTools:
 		if s.AllowedTools != nil {
-			allowedBytes, err := Marshal(s.AllowedTools)
+			allowedBytes, err := MarshalSorted(s.AllowedTools)
 			if err != nil {
 				return nil, err
 			}
@@ -668,13 +724,13 @@ func (ctc ChatToolChoice) MarshalJSON() ([]byte, error) {
 	}
 
 	if ctc.ChatToolChoiceStr != nil {
-		return Marshal(ctc.ChatToolChoiceStr)
+		return MarshalSorted(ctc.ChatToolChoiceStr)
 	}
 	if ctc.ChatToolChoiceStruct != nil {
-		return Marshal(ctc.ChatToolChoiceStruct)
+		return MarshalSorted(ctc.ChatToolChoiceStruct)
 	}
 	// If both are nil, return null
-	return Marshal(nil)
+	return MarshalSorted(nil)
 }
 
 // UnmarshalJSON implements custom JSON unmarshalling for ChatMessageContent.
@@ -804,13 +860,13 @@ func (mc ChatMessageContent) MarshalJSON() ([]byte, error) {
 	}
 
 	if mc.ContentStr != nil {
-		return Marshal(*mc.ContentStr)
+		return MarshalSorted(*mc.ContentStr)
 	}
 	if mc.ContentBlocks != nil {
-		return Marshal(mc.ContentBlocks)
+		return MarshalSorted(mc.ContentBlocks)
 	}
 	// If both are nil, return null
-	return Marshal(nil)
+	return MarshalSorted(nil)
 }
 
 // UnmarshalJSON implements custom JSON unmarshalling for ChatMessageContent.
@@ -1042,7 +1098,7 @@ const (
 	BifrostReasoningDetailsTypeSummary       BifrostReasoningDetailsType = "reasoning.summary"
 	BifrostReasoningDetailsTypeEncrypted     BifrostReasoningDetailsType = "reasoning.encrypted"
 	BifrostReasoningDetailsTypeText          BifrostReasoningDetailsType = "reasoning.text"
-	BifrostReasoningDetailsTypeContentBlocks BifrostReasoningDetailsType = "bifrost.content_blocks"
+	BifrostReasoningDetailsTypeContentBlocks BifrostReasoningDetailsType = "reasoning.content_blocks"
 )
 
 // Not in OpenAI's spec, but needed to support inter provider reasoning capabilities.
@@ -1202,7 +1258,7 @@ func (d ChatPromptTokensDetails) MarshalJSON() ([]byte, error) {
 		CachedWriteTokens int `json:"cached_write_tokens,omitempty"`
 		CachedTokens      int `json:"cached_tokens"`
 	}
-	return Marshal(raw{
+	return MarshalSorted(raw{
 		TextTokens:        d.TextTokens,
 		AudioTokens:       d.AudioTokens,
 		ImageTokens:       d.ImageTokens,

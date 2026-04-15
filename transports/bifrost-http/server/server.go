@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -532,15 +533,23 @@ func (s *BifrostHTTPServer) ReloadProvider(ctx context.Context, provider schemas
 	if err != nil {
 		return nil, fmt.Errorf("failed to update provider model catalog: failed to get keys by provider: %s", err)
 	}
-	modelsInKeys := make([]schemas.Model, 0)
+	allowedInKeys := make([]schemas.Model, 0)
+	deniedInKeys := make([]schemas.Model, 0)
 	for _, key := range providerKeys {
 		for _, model := range key.Models {
-			modelsInKeys = append(modelsInKeys, schemas.Model{
+			if !slices.Contains(key.BlacklistedModels, model) {
+				allowedInKeys = append(allowedInKeys, schemas.Model{
+					ID: string(provider) + "/" + model,
+				})
+			}
+		}
+		for _, model := range key.BlacklistedModels {
+			deniedInKeys = append(deniedInKeys, schemas.Model{
 				ID: string(provider) + "/" + model,
 			})
 		}
 	}
-	s.Config.ModelCatalog.UpsertModelDataForProvider(provider, allModels, modelsInKeys)
+	s.Config.ModelCatalog.UpsertModelDataForProvider(provider, allModels, allowedInKeys, deniedInKeys)
 	unfilteredModelData, listModelsErr := s.Client.ListModelsRequest(bfCtx, &schemas.BifrostListModelsRequest{
 		Provider:   provider,
 		Unfiltered: true,
@@ -641,7 +650,14 @@ func (s *BifrostHTTPServer) ReloadClientConfigFromConfigStore(ctx context.Contex
 	if err != nil {
 		return fmt.Errorf("failed to get client config: %v", err)
 	}
-	s.Config.ClientConfig = *config
+	if config == nil {
+		return fmt.Errorf("client config not found")
+	}
+	s.Config.ClientConfig = config
+	// Reloading whitelisted routes from the client config
+	if s.AuthMiddleware != nil {
+		s.AuthMiddleware.UpdateWhitelistedRoutes(config.WhitelistedRoutes)
+	}
 	// Reloading config in bifrost client
 	if s.Client != nil {
 		account := lib.NewBaseAccount(s.Config)
@@ -763,14 +779,22 @@ func (s *BifrostHTTPServer) ForceReloadPricing(ctx context.Context) error {
 				logger.Error("failed to list models for provider %s: %v: falling back onto the static datasheet", provider, bifrost.GetErrorMessage(listModelsErr))
 			}
 			allowedModels := make([]schemas.Model, 0)
+			deniedModels := make([]schemas.Model, 0)
 			for _, key := range providerConfig.Keys {
 				for _, model := range key.Models {
-					allowedModels = append(allowedModels, schemas.Model{
+					if !slices.Contains(key.BlacklistedModels, model) {
+						allowedModels = append(allowedModels, schemas.Model{
+							ID: string(provider) + "/" + model,
+						})
+					}
+				}
+				for _, model := range key.BlacklistedModels {
+					deniedModels = append(deniedModels, schemas.Model{
 						ID: string(provider) + "/" + model,
 					})
 				}
 			}
-			s.Config.ModelCatalog.UpsertModelDataForProvider(provider, modelData, allowedModels)
+			s.Config.ModelCatalog.UpsertModelDataForProvider(provider, modelData, allowedModels, deniedModels)
 			unfilteredModelData, listModelsErr := s.Client.ListModelsRequest(bfCtx, &schemas.BifrostListModelsRequest{
 				Provider:   provider,
 				Unfiltered: true,
@@ -1289,14 +1313,22 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 				logger.Error("failed to list models for provider %s: %v: falling back onto the static datasheet", provider, bifrost.GetErrorMessage(listModelsErr))
 			}
 			allowedModels := make([]schemas.Model, 0)
+			deniedModels := make([]schemas.Model, 0)
 			for _, key := range providerConfig.Keys {
 				for _, model := range key.Models {
-					allowedModels = append(allowedModels, schemas.Model{
+					if !slices.Contains(key.BlacklistedModels, model) {
+						allowedModels = append(allowedModels, schemas.Model{
+							ID: string(provider) + "/" + model,
+						})
+					}
+				}
+				for _, model := range key.BlacklistedModels {
+					deniedModels = append(deniedModels, schemas.Model{
 						ID: string(provider) + "/" + model,
 					})
 				}
 			}
-			s.Config.ModelCatalog.UpsertModelDataForProvider(provider, modelData, allowedModels)
+			s.Config.ModelCatalog.UpsertModelDataForProvider(provider, modelData, allowedModels, deniedModels)
 			unfilteredModelData, listModelsErr := s.Client.ListModelsRequest(bfCtx, &schemas.BifrostListModelsRequest{
 				Provider:   provider,
 				Unfiltered: true,

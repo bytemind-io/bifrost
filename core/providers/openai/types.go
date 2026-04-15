@@ -7,6 +7,7 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/maximhq/bifrost/core/schemas"
+	providerUtils "github.com/maximhq/bifrost/core/providers/utils"
 )
 
 const MinMaxCompletionTokens = 16
@@ -24,6 +25,9 @@ type OpenAITextCompletionRequest struct {
 
 	schemas.TextCompletionParameters
 	Stream *bool `json:"stream,omitempty"`
+
+	// PromptCacheIsolationKey is the Fireworks completions field for cache isolation.
+	PromptCacheIsolationKey *string `json:"prompt_cache_isolation_key,omitempty"`
 
 	// Bifrost specific field (only parsed when converting from Provider -> Bifrost request)
 	Fallbacks   []string               `json:"fallbacks,omitempty"`
@@ -75,6 +79,9 @@ type OpenAIChatRequest struct {
 	schemas.ChatParameters
 	Stream *bool `json:"stream,omitempty"`
 
+	// PromptCacheIsolationKey is the Fireworks chat-completions field for cache isolation.
+	PromptCacheIsolationKey *string `json:"prompt_cache_isolation_key,omitempty"`
+
 	//NOTE: MaxCompletionTokens is a new replacement for max_tokens but some providers still use max_tokens.
 	// This Field is populated only for such providers and is NOT to be used externally.
 	MaxTokens *int `json:"max_tokens,omitempty"`
@@ -110,7 +117,7 @@ type OpenAIMessage struct {
 // OpenAIChatAssistantMessage represents an OpenAI chat assistant message
 type OpenAIChatAssistantMessage struct {
 	Refusal     *string                                  `json:"refusal,omitempty"`
-	Reasoning   *string                                  `json:"reasoning,omitempty"`
+	Reasoning   *string                                  `json:"reasoning_content,omitempty"`
 	Annotations []schemas.ChatAssistantMessageAnnotation `json:"annotations,omitempty"`
 	ToolCalls   []schemas.ChatAssistantMessageToolCall   `json:"tool_calls,omitempty"`
 }
@@ -234,7 +241,7 @@ func (req *OpenAIChatRequest) MarshalJSON() ([]byte, error) {
 		aux.ReasoningEffort = req.Reasoning.Effort
 	}
 
-	return sonic.Marshal(aux)
+	return providerUtils.MarshalSorted(aux)
 }
 
 // UnmarshalJSON implements custom JSON unmarshalling for OpenAIChatRequest.
@@ -244,11 +251,12 @@ func (req *OpenAIChatRequest) MarshalJSON() ([]byte, error) {
 func (req *OpenAIChatRequest) UnmarshalJSON(data []byte) error {
 	// Unmarshal the request-specific fields directly
 	type baseFields struct {
-		Model     string          `json:"model"`
-		Messages  []OpenAIMessage `json:"messages"`
-		Stream    *bool           `json:"stream,omitempty"`
-		MaxTokens *int            `json:"max_tokens,omitempty"`
-		Fallbacks []string        `json:"fallbacks,omitempty"`
+		Model                   string          `json:"model"`
+		Messages                []OpenAIMessage `json:"messages"`
+		Stream                  *bool           `json:"stream,omitempty"`
+		MaxTokens               *int            `json:"max_tokens,omitempty"`
+		PromptCacheIsolationKey *string         `json:"prompt_cache_isolation_key,omitempty"`
+		Fallbacks               []string        `json:"fallbacks,omitempty"`
 	}
 	var base baseFields
 	if err := sonic.Unmarshal(data, &base); err != nil {
@@ -258,6 +266,7 @@ func (req *OpenAIChatRequest) UnmarshalJSON(data []byte) error {
 	req.Messages = base.Messages
 	req.Stream = base.Stream
 	req.MaxTokens = base.MaxTokens
+	req.PromptCacheIsolationKey = base.PromptCacheIsolationKey
 	req.Fallbacks = base.Fallbacks
 
 	// Unmarshal ChatParameters (which has its own custom unmarshaller)
@@ -301,7 +310,7 @@ func (r *OpenAIResponsesRequestInput) UnmarshalJSON(data []byte) error {
 // MarshalJSON implements custom JSON marshalling for OpenAIResponsesRequestInput
 func (r *OpenAIResponsesRequestInput) MarshalJSON() ([]byte, error) {
 	if r.OpenAIResponsesRequestInputStr != nil {
-		return sonic.Marshal(*r.OpenAIResponsesRequestInputStr)
+		return providerUtils.MarshalSorted(*r.OpenAIResponsesRequestInputStr)
 	}
 	if r.OpenAIResponsesRequestInputArray != nil {
 		// First pass: check if we need to modify anything
@@ -315,7 +324,7 @@ func (r *OpenAIResponsesRequestInput) MarshalJSON() ([]byte, error) {
 
 		// If no CacheControl found anywhere, marshal as-is
 		if !needsCopy {
-			return sonic.Marshal(r.OpenAIResponsesRequestInputArray)
+			return providerUtils.MarshalSorted(r.OpenAIResponsesRequestInputArray)
 		}
 
 		// Only copy messages that have CacheControl
@@ -458,9 +467,9 @@ func (r *OpenAIResponsesRequestInput) MarshalJSON() ([]byte, error) {
 				}
 			}
 		}
-		return sonic.Marshal(messagesCopy)
+		return providerUtils.MarshalSorted(messagesCopy)
 	}
-	return sonic.Marshal(nil)
+	return providerUtils.MarshalSorted(nil)
 }
 
 // Helper function to check if a chat message has any CacheControl fields or FileType in file blocks
@@ -653,7 +662,7 @@ func (resp *OpenAIResponsesRequest) MarshalJSON() ([]byte, error) {
 		}
 	}
 
-	return sonic.Marshal(aux)
+	return providerUtils.MarshalSorted(aux)
 }
 
 // IsStreamingRequested implements the StreamingRequest interface

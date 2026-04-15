@@ -16,7 +16,7 @@ type TableClientConfig struct {
 	AllowedHeadersJSON              string `gorm:"type:text" json:"-"` // JSON serialized []string
 	HeaderFilterConfigJSON          string `gorm:"type:text" json:"-"` // JSON serialized GlobalHeaderFilterConfig
 	InitialPoolSize                 int    `gorm:"default:300" json:"initial_pool_size"`
-	EnableLogging                   bool   `gorm:"" json:"enable_logging"`
+	EnableLogging                   *bool  `gorm:"default:true" json:"enable_logging"`
 	DisableContentLogging           bool   `gorm:"default:false" json:"disable_content_logging"` // DisableContentLogging controls whether sensitive content (inputs, outputs, embeddings, etc.) is logged
 	DisableDBPingsInHealth          bool   `gorm:"default:false" json:"disable_db_pings_in_health"`
 	LogRetentionDays                int    `gorm:"default:365" json:"log_retention_days" validate:"min=1"` // Number of days to retain logs (minimum 1 day)
@@ -33,6 +33,7 @@ type TableClientConfig struct {
 	RequiredHeadersJSON             string `gorm:"type:text" json:"-"`                                        // JSON serialized []string
 	LoggingHeadersJSON              string `gorm:"type:text" json:"-"`                                        // JSON serialized []string
 	HideDeletedVirtualKeysInFilters bool   `gorm:"default:false" json:"hide_deleted_virtual_keys_in_filters"` // Hide deleted virtual keys in logs filter dropdowns
+	WhitelistedRoutesJSON           string `gorm:"type:text" json:"-"`                                        // JSON serialized []string
 
 	// LiteLLM fallback flag
 	EnableLiteLLMFallbacks bool `gorm:"column:enable_litellm_fallbacks;default:false" json:"enable_litellm_fallbacks"`
@@ -50,6 +51,7 @@ type TableClientConfig struct {
 	AllowedHeaders     []string                  `gorm:"-" json:"allowed_headers,omitempty"`
 	RequiredHeaders    []string                  `gorm:"-" json:"required_headers,omitempty"`
 	LoggingHeaders     []string                  `gorm:"-" json:"logging_headers,omitempty"`
+	WhitelistedRoutes  []string                  `gorm:"-" json:"whitelisted_routes,omitempty"`
 	HeaderFilterConfig *GlobalHeaderFilterConfig `gorm:"-" json:"header_filter_config,omitempty"`
 }
 
@@ -85,6 +87,16 @@ func (cc *TableClientConfig) BeforeSave(tx *gorm.DB) error {
 		cc.AllowedHeadersJSON = string(data)
 	} else {
 		cc.AllowedHeadersJSON = "[]"
+	}
+
+	if cc.WhitelistedRoutes != nil {
+		data, err := json.Marshal(cc.WhitelistedRoutes)
+		if err != nil {
+			return err
+		}
+		cc.WhitelistedRoutesJSON = string(data)
+	} else {
+		cc.WhitelistedRoutesJSON = "[]"
 	}
 
 	if cc.RequiredHeaders != nil {
@@ -136,6 +148,12 @@ func (cc *TableClientConfig) AfterFind(tx *gorm.DB) error {
 
 	if cc.AllowedHeadersJSON != "" {
 		if err := json.Unmarshal([]byte(cc.AllowedHeadersJSON), &cc.AllowedHeaders); err != nil {
+			return err
+		}
+	}
+
+	if cc.WhitelistedRoutesJSON != "" {
+		if err := json.Unmarshal([]byte(cc.WhitelistedRoutesJSON), &cc.WhitelistedRoutes); err != nil {
 			return err
 		}
 	}

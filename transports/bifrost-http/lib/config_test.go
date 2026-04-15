@@ -397,7 +397,7 @@ func NewMockConfigStore() *MockConfigStore {
 func (m *MockConfigStore) Ping(ctx context.Context) error                 { return nil }
 func (m *MockConfigStore) EncryptPlaintextRows(ctx context.Context) error { return nil }
 func (m *MockConfigStore) Close(ctx context.Context) error                { return nil }
-func (m *MockConfigStore) DB() *gorm.DB                    { return nil }
+func (m *MockConfigStore) DB() *gorm.DB                                   { return nil }
 func (m *MockConfigStore) ExecuteTransaction(ctx context.Context, fn func(tx *gorm.DB) error) error {
 	return fn(nil)
 }
@@ -1151,7 +1151,7 @@ func createConfigFile(t *testing.T, dir string, data *ConfigData) {
 func makeClientConfig(initialPoolSize int, enableLogging bool) *configstore.ClientConfig {
 	return &configstore.ClientConfig{
 		InitialPoolSize:      initialPoolSize,
-		EnableLogging:        enableLogging,
+		EnableLogging:        schemas.Ptr(enableLogging),
 		MaxRequestBodySizeMB: 10,
 		PrometheusLabels:     []string{"label1"},
 		AllowedOrigins:       []string{"http://localhost:3000"},
@@ -1236,7 +1236,7 @@ func makeConfigDataWithProvidersAndDir(providers map[string]configstore.Provider
 	return &ConfigData{
 		Client: &configstore.ClientConfig{
 			InitialPoolSize:      10,
-			EnableLogging:        true,
+			EnableLogging:        new(true),
 			MaxRequestBodySizeMB: 100,
 			AllowedOrigins:       []string{"*"},
 		},
@@ -1262,7 +1262,7 @@ func makeConfigDataWithVirtualKeysAndDir(providers map[string]configstore.Provid
 	return &ConfigData{
 		Client: &configstore.ClientConfig{
 			InitialPoolSize:      10,
-			EnableLogging:        true,
+			EnableLogging:        new(true),
 			MaxRequestBodySizeMB: 100,
 			AllowedOrigins:       []string{"*"},
 		},
@@ -1290,7 +1290,7 @@ func makeConfigDataFullWithDir(client *configstore.ClientConfig, providers map[s
 	if client == nil {
 		client = &configstore.ClientConfig{
 			InitialPoolSize:      10,
-			EnableLogging:        true,
+			EnableLogging:        new(true),
 			MaxRequestBodySizeMB: 100,
 			AllowedOrigins:       []string{"*"},
 		}
@@ -1456,7 +1456,7 @@ func TestLoadConfig_ClientConfig_Merge(t *testing.T) {
 	// Create config file with client config
 	fileClientConfig := &configstore.ClientConfig{
 		InitialPoolSize:       20,
-		EnableLogging:         true,
+		EnableLogging:         new(true),
 		PrometheusLabels:      []string{"file-label"},
 		AllowedOrigins:        []string{"http://file-origin.com"},
 		MaxRequestBodySizeMB:  15,
@@ -1472,7 +1472,7 @@ func TestLoadConfig_ClientConfig_Merge(t *testing.T) {
 	mockStore := NewMockConfigStore()
 	mockStore.clientConfig = &configstore.ClientConfig{
 		InitialPoolSize:      10,
-		EnableLogging:        false,
+		EnableLogging:        new(false),
 		PrometheusLabels:     []string{"db-label"},
 		MaxRequestBodySizeMB: 5,
 		// AllowedOrigins is empty in DB
@@ -1508,7 +1508,9 @@ func TestLoadConfig_ClientConfig_Merge(t *testing.T) {
 	}
 
 	// Boolean fields: file true overrides DB false
-	if !mergedConfig.EnableLogging && fileClientConfig.EnableLogging {
+	mergedLogging := mergedConfig.EnableLogging == nil || *mergedConfig.EnableLogging
+	fileLogging := fileClientConfig.EnableLogging != nil && *fileClientConfig.EnableLogging
+	if !mergedLogging && fileLogging {
 		mergedConfig.EnableLogging = fileClientConfig.EnableLogging
 	}
 	if !mergedConfig.DisableContentLogging && fileClientConfig.DisableContentLogging {
@@ -1532,7 +1534,7 @@ func TestLoadConfig_ClientConfig_Merge(t *testing.T) {
 		t.Errorf("Expected MaxRequestBodySizeMB to be 5 (from DB), got %d", mergedConfig.MaxRequestBodySizeMB)
 	}
 
-	if !mergedConfig.EnableLogging {
+	if mergedConfig.EnableLogging == nil || !*mergedConfig.EnableLogging {
 		t.Error("Expected EnableLogging to be true (file true overrides DB false)")
 	}
 
@@ -12245,13 +12247,13 @@ func TestMergePluginsFromFile_NoChangeSkipsMerge(t *testing.T) {
 	mock := &MockConfigStore{
 		plugins: []*tables.TablePlugin{
 			{
-				Name:      "plugin-a",
-				Enabled:   true,
-				Placement: &postBuiltin,
-				Order:     &order0,
-				Version:   1,
+				Name:       "plugin-a",
+				Enabled:    true,
+				Placement:  &postBuiltin,
+				Order:      &order0,
+				Version:    1,
 				ConfigJSON: `{"setting":"db-value"}`,
-				Config:    map[string]any{"setting": "db-value"},
+				Config:     map[string]any{"setting": "db-value"},
 			},
 		},
 	}
@@ -12290,17 +12292,17 @@ func TestGenerateClientConfigHash(t *testing.T) {
 	initTestLogger()
 
 	cc1 := configstore.ClientConfig{
-		DropExcessRequests:      true,
-		InitialPoolSize:         300,
-		PrometheusLabels:        []string{"label1", "label2"},
-		EnableLogging:           true,
-		DisableContentLogging:   false,
-		LogRetentionDays:        30,
+		DropExcessRequests:     true,
+		InitialPoolSize:        300,
+		PrometheusLabels:       []string{"label1", "label2"},
+		EnableLogging:          new(true),
+		DisableContentLogging:  false,
+		LogRetentionDays:       30,
 		EnforceAuthOnInference: false,
 		AllowDirectKeys:        true,
-		AllowedOrigins:          []string{"http://localhost:3000"},
-		MaxRequestBodySizeMB:    100,
-		EnableLiteLLMFallbacks:  false,
+		AllowedOrigins:         []string{"http://localhost:3000"},
+		MaxRequestBodySizeMB:   100,
+		EnableLiteLLMFallbacks: false,
 	}
 
 	hash1, err := cc1.GenerateClientConfigHash()
@@ -12343,7 +12345,7 @@ func TestGenerateClientConfigHash(t *testing.T) {
 
 	// Different EnableLogging should produce different hash
 	cc5 := cc1
-	cc5.EnableLogging = false
+	cc5.EnableLogging = new(false)
 	hash5, _ := cc5.GenerateClientConfigHash()
 	if hash1 == hash5 {
 		t.Error("Different EnableLogging should produce different hash")
@@ -13339,30 +13341,30 @@ func TestGenerateClientConfigHash_RuntimeVsMigrationParity(t *testing.T) {
 		labels := []string{"provider", "model", "status"}
 
 		ccToSave := tables.TableClientConfig{
-			DropExcessRequests:      true,
-			InitialPoolSize:         300,
-			PrometheusLabels:        labels,
-			EnableLogging:           true,
-			DisableContentLogging:   false,
-			LogRetentionDays:        30,
+			DropExcessRequests:     true,
+			InitialPoolSize:        300,
+			PrometheusLabels:       labels,
+			EnableLogging:          new(true),
+			DisableContentLogging:  false,
+			LogRetentionDays:       30,
 			EnforceAuthOnInference: false,
-			AllowDirectKeys:         true,
-			MaxRequestBodySizeMB:    100,
-			EnableLiteLLMFallbacks:  false,
+			AllowDirectKeys:        true,
+			MaxRequestBodySizeMB:   100,
+			EnableLiteLLMFallbacks: false,
 		}
 
 		// Generate hash from config
 		clientConfig := configstore.ClientConfig{
-			DropExcessRequests:      ccToSave.DropExcessRequests,
-			InitialPoolSize:         ccToSave.InitialPoolSize,
-			PrometheusLabels:        ccToSave.PrometheusLabels,
-			EnableLogging:           ccToSave.EnableLogging,
-			DisableContentLogging:   ccToSave.DisableContentLogging,
-			LogRetentionDays:        ccToSave.LogRetentionDays,
+			DropExcessRequests:     ccToSave.DropExcessRequests,
+			InitialPoolSize:        ccToSave.InitialPoolSize,
+			PrometheusLabels:       ccToSave.PrometheusLabels,
+			EnableLogging:          ccToSave.EnableLogging,
+			DisableContentLogging:  ccToSave.DisableContentLogging,
+			LogRetentionDays:       ccToSave.LogRetentionDays,
 			EnforceAuthOnInference: ccToSave.EnforceAuthOnInference,
-			AllowDirectKeys:         ccToSave.AllowDirectKeys,
-			MaxRequestBodySizeMB:    ccToSave.MaxRequestBodySizeMB,
-			EnableLiteLLMFallbacks:  ccToSave.EnableLiteLLMFallbacks,
+			AllowDirectKeys:        ccToSave.AllowDirectKeys,
+			MaxRequestBodySizeMB:   ccToSave.MaxRequestBodySizeMB,
+			EnableLiteLLMFallbacks: ccToSave.EnableLiteLLMFallbacks,
 		}
 		hashBeforeSave, _ := clientConfig.GenerateClientConfigHash()
 
@@ -13372,16 +13374,16 @@ func TestGenerateClientConfigHash_RuntimeVsMigrationParity(t *testing.T) {
 		db.Where("id = ?", ccToSave.ID).First(&ccFromDB)
 
 		clientConfigFromDB := configstore.ClientConfig{
-			DropExcessRequests:      ccFromDB.DropExcessRequests,
-			InitialPoolSize:         ccFromDB.InitialPoolSize,
-			PrometheusLabels:        ccFromDB.PrometheusLabels,
-			EnableLogging:           ccFromDB.EnableLogging,
-			DisableContentLogging:   ccFromDB.DisableContentLogging,
-			LogRetentionDays:        ccFromDB.LogRetentionDays,
+			DropExcessRequests:     ccFromDB.DropExcessRequests,
+			InitialPoolSize:        ccFromDB.InitialPoolSize,
+			PrometheusLabels:       ccFromDB.PrometheusLabels,
+			EnableLogging:          ccFromDB.EnableLogging,
+			DisableContentLogging:  ccFromDB.DisableContentLogging,
+			LogRetentionDays:       ccFromDB.LogRetentionDays,
 			EnforceAuthOnInference: ccFromDB.EnforceAuthOnInference,
-			AllowDirectKeys:         ccFromDB.AllowDirectKeys,
-			MaxRequestBodySizeMB:    ccFromDB.MaxRequestBodySizeMB,
-			EnableLiteLLMFallbacks:  ccFromDB.EnableLiteLLMFallbacks,
+			AllowDirectKeys:        ccFromDB.AllowDirectKeys,
+			MaxRequestBodySizeMB:   ccFromDB.MaxRequestBodySizeMB,
+			EnableLiteLLMFallbacks: ccFromDB.EnableLiteLLMFallbacks,
 		}
 		hashAfterLoad, _ := clientConfigFromDB.GenerateClientConfigHash()
 
@@ -13403,7 +13405,7 @@ func TestGenerateClientConfigHash_RuntimeVsMigrationParity(t *testing.T) {
 			DropExcessRequests:   true,
 			InitialPoolSize:      300,
 			AllowedOrigins:       origins,
-			EnableLogging:        true,
+			EnableLogging:        new(true),
 			LogRetentionDays:     30,
 			MaxRequestBodySizeMB: 100,
 		}
@@ -15388,12 +15390,13 @@ func getSchemaTypeMappings() []schemaTypeMapping {
 
 // enterpriseSchemaPaths are schema paths that exist only in enterprise version
 var enterpriseSchemaPaths = map[string]bool{
-	"$schema":              true,
-	"audit_logs":           true,
-	"cluster_config":       true,
-	"saml_config":          true,
-	"load_balancer_config": true,
-	"guardrails_config":    true,
+	"$schema":                    true,
+	"audit_logs":                 true,
+	"cluster_config":             true,
+	"saml_config":                true,
+	"load_balancer_config":       true,
+	"guardrails_config":          true,
+	"large_payload_optimization": true,
 }
 
 // excludedGoFields are Go struct fields that should not be in the schema (internal use only)
@@ -15749,12 +15752,13 @@ func TestConfigSchemaSyncTopLevel(t *testing.T) {
 	// Enterprise-only features: These fields exist in the JSON schema for documentation
 	// and validation purposes, but are only available in the enterprise version.
 	enterpriseSchemaFields := map[string]bool{
-		"$schema":              true,
-		"audit_logs":           true,
-		"cluster_config":       true,
-		"saml_config":          true,
-		"load_balancer_config": true,
-		"guardrails_config":    true,
+		"$schema":                      true,
+		"audit_logs":                   true,
+		"cluster_config":               true,
+		"saml_config":                  true,
+		"load_balancer_config":         true,
+		"guardrails_config":            true,
+		"large_payload_optimization":   true,
 	}
 
 	schema := loadJSONSchema(t)
@@ -15806,11 +15810,11 @@ func TestConfigSchemaSyncTopLevel(t *testing.T) {
 // ===================================================================================
 
 func TestResolveFrameworkPricingConfig(t *testing.T) {
+	initTestLogger()
 	defaultURL := modelcatalog.DefaultPricingURL
 	defaultSyncSeconds := int64(modelcatalog.DefaultPricingSyncInterval.Seconds())
 	fileURL := "https://example.com/pricing.json"
-	fileSyncDuration := 12 * time.Hour
-	fileSyncSeconds := int64(fileSyncDuration.Seconds())
+	fileSyncSeconds := int64((12 * time.Hour).Seconds())
 	dbURL := "https://db.example.com/pricing.json"
 	dbSyncSeconds := int64((6 * time.Hour).Seconds())
 
@@ -15823,7 +15827,7 @@ func TestResolveFrameworkPricingConfig(t *testing.T) {
 		fileConfig := &framework.FrameworkConfig{
 			Pricing: &modelcatalog.Config{
 				PricingURL:          &fileURL,
-				PricingSyncInterval: &fileSyncDuration,
+				PricingSyncInterval: &fileSyncSeconds,
 			},
 		}
 
@@ -15833,7 +15837,7 @@ func TestResolveFrameworkPricingConfig(t *testing.T) {
 		require.Equal(t, dbURL, *normalizedTable.PricingURL)
 		require.Equal(t, dbSyncSeconds, *normalizedTable.PricingSyncInterval)
 		require.Equal(t, dbURL, *normalizedModelCatalog.PricingURL)
-		require.Equal(t, 6*time.Hour, *normalizedModelCatalog.PricingSyncInterval)
+		require.Equal(t, dbSyncSeconds, *normalizedModelCatalog.PricingSyncInterval)
 	})
 
 	t.Run("fallback to file when db fields are missing", func(t *testing.T) {
@@ -15845,7 +15849,7 @@ func TestResolveFrameworkPricingConfig(t *testing.T) {
 		fileConfig := &framework.FrameworkConfig{
 			Pricing: &modelcatalog.Config{
 				PricingURL:          &fileURL,
-				PricingSyncInterval: &fileSyncDuration,
+				PricingSyncInterval: &fileSyncSeconds,
 			},
 		}
 
@@ -15855,7 +15859,7 @@ func TestResolveFrameworkPricingConfig(t *testing.T) {
 		require.Equal(t, fileURL, *normalizedTable.PricingURL)
 		require.Equal(t, fileSyncSeconds, *normalizedTable.PricingSyncInterval)
 		require.Equal(t, fileURL, *normalizedModelCatalog.PricingURL)
-		require.Equal(t, fileSyncDuration, *normalizedModelCatalog.PricingSyncInterval)
+		require.Equal(t, fileSyncSeconds, *normalizedModelCatalog.PricingSyncInterval)
 	})
 
 	t.Run("fallback to defaults when db and file are missing", func(t *testing.T) {
@@ -15864,10 +15868,10 @@ func TestResolveFrameworkPricingConfig(t *testing.T) {
 		require.Equal(t, defaultURL, *normalizedTable.PricingURL)
 		require.Equal(t, defaultSyncSeconds, *normalizedTable.PricingSyncInterval)
 		require.Equal(t, defaultURL, *normalizedModelCatalog.PricingURL)
-		require.Equal(t, modelcatalog.DefaultPricingSyncInterval, *normalizedModelCatalog.PricingSyncInterval)
+		require.Equal(t, defaultSyncSeconds, *normalizedModelCatalog.PricingSyncInterval)
 	})
 
-	t.Run("invalid db interval falls back and requests db update", func(t *testing.T) {
+	t.Run("invalid db interval (zero) falls back and requests db update", func(t *testing.T) {
 		invalidDBSync := int64(0)
 		dbConfig := &tables.TableFrameworkConfig{
 			ID:                  5,
@@ -15880,7 +15884,173 @@ func TestResolveFrameworkPricingConfig(t *testing.T) {
 		require.Equal(t, dbURL, *normalizedTable.PricingURL)
 		require.Equal(t, defaultSyncSeconds, *normalizedTable.PricingSyncInterval)
 		require.Equal(t, dbURL, *normalizedModelCatalog.PricingURL)
-		require.Equal(t, modelcatalog.DefaultPricingSyncInterval, *normalizedModelCatalog.PricingSyncInterval)
+		require.Equal(t, defaultSyncSeconds, *normalizedModelCatalog.PricingSyncInterval)
+	})
+
+	t.Run("invalid db interval (negative) falls back and requests db update", func(t *testing.T) {
+		negativeDBSync := int64(-100)
+		dbConfig := &tables.TableFrameworkConfig{
+			ID:                  6,
+			PricingURL:          &dbURL,
+			PricingSyncInterval: &negativeDBSync,
+		}
+
+		normalizedTable, normalizedModelCatalog, needsDBUpdate := ResolveFrameworkPricingConfig(dbConfig, nil)
+		require.True(t, needsDBUpdate)
+		require.Equal(t, defaultSyncSeconds, *normalizedTable.PricingSyncInterval)
+		require.Equal(t, defaultSyncSeconds, *normalizedModelCatalog.PricingSyncInterval)
+	})
+
+	t.Run("file interval below minimum is clamped to 3600", func(t *testing.T) {
+		tooLow := int64(1800) // 30 minutes — below minimum 3600
+		fileConfig := &framework.FrameworkConfig{
+			Pricing: &modelcatalog.Config{
+				PricingSyncInterval: &tooLow,
+			},
+		}
+
+		normalizedTable, normalizedModelCatalog, needsDBUpdate := ResolveFrameworkPricingConfig(nil, fileConfig)
+		require.False(t, needsDBUpdate)
+		require.Equal(t, modelcatalog.MinimumPricingSyncIntervalSec, *normalizedTable.PricingSyncInterval)
+		require.Equal(t, modelcatalog.MinimumPricingSyncIntervalSec, *normalizedModelCatalog.PricingSyncInterval)
+	})
+
+	t.Run("file interval of zero is ignored and defaults apply", func(t *testing.T) {
+		zero := int64(0)
+		fileConfig := &framework.FrameworkConfig{
+			Pricing: &modelcatalog.Config{
+				PricingSyncInterval: &zero,
+			},
+		}
+
+		normalizedTable, normalizedModelCatalog, needsDBUpdate := ResolveFrameworkPricingConfig(nil, fileConfig)
+		require.False(t, needsDBUpdate)
+		require.Equal(t, defaultSyncSeconds, *normalizedTable.PricingSyncInterval)
+		require.Equal(t, defaultSyncSeconds, *normalizedModelCatalog.PricingSyncInterval)
+	})
+
+	t.Run("file interval negative is ignored and defaults apply", func(t *testing.T) {
+		neg := int64(-1)
+		fileConfig := &framework.FrameworkConfig{
+			Pricing: &modelcatalog.Config{
+				PricingSyncInterval: &neg,
+			},
+		}
+
+		normalizedTable, normalizedModelCatalog, needsDBUpdate := ResolveFrameworkPricingConfig(nil, fileConfig)
+		require.False(t, needsDBUpdate)
+		require.Equal(t, defaultSyncSeconds, *normalizedTable.PricingSyncInterval)
+		require.Equal(t, defaultSyncSeconds, *normalizedModelCatalog.PricingSyncInterval)
+	})
+
+	t.Run("pricing_url with missing env var falls back to literal string", func(t *testing.T) {
+		// Use a name that is guaranteed not to be set in the test environment
+		rawURL := "env.BIFROST_TEST_PRICING_URL_NONEXISTENT_XYZ"
+		prev, existed := os.LookupEnv("BIFROST_TEST_PRICING_URL_NONEXISTENT_XYZ")
+		os.Unsetenv("BIFROST_TEST_PRICING_URL_NONEXISTENT_XYZ")
+		t.Cleanup(func() {
+			if existed {
+				os.Setenv("BIFROST_TEST_PRICING_URL_NONEXISTENT_XYZ", prev)
+			}
+		})
+		fileConfig := &framework.FrameworkConfig{
+			Pricing: &modelcatalog.Config{
+				PricingURL: &rawURL,
+			},
+		}
+
+		normalizedTable, normalizedModelCatalog, _ := ResolveFrameworkPricingConfig(nil, fileConfig)
+		// Should preserve the original "env.*" literal, not silently revert to default URL
+		require.Equal(t, rawURL, *normalizedTable.PricingURL)
+		require.Equal(t, rawURL, *normalizedModelCatalog.PricingURL)
+	})
+
+	t.Run("pricing_url with valid env var is resolved", func(t *testing.T) {
+		t.Setenv("BIFROST_TEST_PRICING_URL_VALID", "https://resolved.example.com/pricing.json")
+		rawURL := "env.BIFROST_TEST_PRICING_URL_VALID"
+		fileConfig := &framework.FrameworkConfig{
+			Pricing: &modelcatalog.Config{
+				PricingURL: &rawURL,
+			},
+		}
+
+		normalizedTable, normalizedModelCatalog, _ := ResolveFrameworkPricingConfig(nil, fileConfig)
+		require.Equal(t, "https://resolved.example.com/pricing.json", *normalizedTable.PricingURL)
+		require.Equal(t, "https://resolved.example.com/pricing.json", *normalizedModelCatalog.PricingURL)
+	})
+
+	t.Run("partial/embedded env string is treated as literal (no substitution)", func(t *testing.T) {
+		// envutils.ProcessEnvValue only substitutes full-string "env.VAR" values.
+		// A URL that contains env syntax mid-string must not be partially expanded.
+		t.Setenv("BIFROST_TEST_PRICING_HOST", "host.example.com")
+		embeddedURL := "https://env.BIFROST_TEST_PRICING_HOST/pricing.json"
+		fileConfig := &framework.FrameworkConfig{
+			Pricing: &modelcatalog.Config{
+				PricingURL: &embeddedURL,
+			},
+		}
+
+		normalizedTable, normalizedModelCatalog, _ := ResolveFrameworkPricingConfig(nil, fileConfig)
+		// The URL does not start with "env." so it must be returned verbatim.
+		require.Equal(t, embeddedURL, *normalizedTable.PricingURL)
+		require.Equal(t, embeddedURL, *normalizedModelCatalog.PricingURL)
+	})
+
+	t.Run("returned pointers are never nil regardless of inputs", func(t *testing.T) {
+		// Verify the no-nil contract for all four degenerate input combinations.
+		inputs := []struct {
+			db   *tables.TableFrameworkConfig
+			file *framework.FrameworkConfig
+		}{
+			{nil, nil},
+			{&tables.TableFrameworkConfig{}, nil},
+			{nil, &framework.FrameworkConfig{}},
+			{&tables.TableFrameworkConfig{}, &framework.FrameworkConfig{}},
+		}
+		for _, tc := range inputs {
+			tableOut, catalogOut, _ := ResolveFrameworkPricingConfig(tc.db, tc.file)
+			require.NotNil(t, tableOut, "TableFrameworkConfig must never be nil")
+			require.NotNil(t, tableOut.PricingURL, "PricingURL must never be nil")
+			require.NotNil(t, tableOut.PricingSyncInterval, "PricingSyncInterval must never be nil")
+			require.NotNil(t, catalogOut, "modelcatalog.Config must never be nil")
+			require.NotNil(t, catalogOut.PricingURL, "Config.PricingURL must never be nil")
+			require.NotNil(t, catalogOut.PricingSyncInterval, "Config.PricingSyncInterval must never be nil")
+		}
+	})
+
+	t.Run("db corrupted (zero) with valid file interval uses file value and requests db backfill", func(t *testing.T) {
+		// Real-world recovery scenario: a pre-fix Bifrost wrote 0 nanoseconds (interpreted
+		// as 0 seconds) to the DB. The new code must heal this by preferring the valid
+		// file value and flagging the DB for an update so the next restart finds a sane
+		// value without requiring manual DB intervention.
+		corruptedDBSync := int64(0)
+		fileSync := int64(7200) // 2 hours — valid, above minimum
+
+		dbConfig := &tables.TableFrameworkConfig{
+			ID:                  9,
+			PricingURL:          &dbURL,
+			PricingSyncInterval: &corruptedDBSync,
+		}
+		fileConfig := &framework.FrameworkConfig{
+			Pricing: &modelcatalog.Config{
+				PricingSyncInterval: &fileSync,
+			},
+		}
+
+		tableOut, catalogOut, needsDBUpdate := ResolveFrameworkPricingConfig(dbConfig, fileConfig)
+
+		// DB corruption must be detected and flagged for backfill.
+		require.True(t, needsDBUpdate, "corrupted DB interval (zero) must trigger a DB backfill")
+
+		// The file-configured value (7200 s) must win over the corrupted DB value.
+		require.Equal(t, int64(7200), *tableOut.PricingSyncInterval,
+			"table output must reflect valid file interval, not corrupted DB value")
+		require.Equal(t, int64(7200), *catalogOut.PricingSyncInterval,
+			"catalog output must reflect valid file interval, not corrupted DB value")
+
+		// URL should still come from DB (only the interval was corrupted).
+		require.Equal(t, dbURL, *tableOut.PricingURL,
+			"URL from a valid DB field must still be used")
 	})
 }
 
@@ -16692,7 +16862,8 @@ func assertDefaultClientConfigValues(t *testing.T, cc configstore.ClientConfig) 
 	t.Helper()
 	require.Equal(t, false, cc.DropExcessRequests, "DropExcessRequests should default to false")
 	require.Equal(t, schemas.DefaultInitialPoolSize, cc.InitialPoolSize, "InitialPoolSize should match default")
-	require.Equal(t, true, cc.EnableLogging, "EnableLogging should default to true")
+	require.NotNil(t, cc.EnableLogging, "EnableLogging should not be nil")
+	require.Equal(t, true, *cc.EnableLogging, "EnableLogging should default to true")
 	require.Equal(t, false, cc.DisableContentLogging, "DisableContentLogging should default to false")
 	require.Equal(t, false, cc.EnforceAuthOnInference, "EnforceAuthOnInference should default to false")
 	require.Equal(t, false, cc.AllowDirectKeys, "AllowDirectKeys should default to false")
@@ -16719,7 +16890,7 @@ func TestLoadConfig_NoConfigFile_FreshStart(t *testing.T) {
 	require.NotNil(t, config.ConfigStore, "ConfigStore should be created by default")
 
 	// Verify default client config
-	assertDefaultClientConfigValues(t, config.ClientConfig)
+	assertDefaultClientConfigValues(t, *config.ClientConfig)
 
 	// HeaderMatcher is nil when no header filter is configured (DefaultClientConfig has nil HeaderFilterConfig)
 	// This is expected behavior - it's only set when HeaderFilterConfig is non-nil
@@ -16879,7 +17050,7 @@ func TestLoadConfig_PartialConfigFile_OnlyProviders(t *testing.T) {
 	require.True(t, hasOpenAI, "OpenAI should be loaded from file")
 
 	// Verify client config gets defaults (no client in file)
-	assertDefaultClientConfigValues(t, config.ClientConfig)
+	assertDefaultClientConfigValues(t, *config.ClientConfig)
 
 	// Verify other sections are nil/empty
 	require.Empty(t, config.PluginConfigs, "Plugins should be empty")
@@ -16897,7 +17068,7 @@ func TestLoadConfig_PartialConfigFile_OnlyClient(t *testing.T) {
 	configData := makeMinimalConfigData(tempDir)
 	configData.Client = &configstore.ClientConfig{
 		InitialPoolSize:      50,
-		EnableLogging:        false,
+		EnableLogging:        new(false),
 		MaxRequestBodySizeMB: 200,
 		AllowedOrigins:       []string{"http://example.com"},
 	}
@@ -16911,7 +17082,8 @@ func TestLoadConfig_PartialConfigFile_OnlyClient(t *testing.T) {
 
 	// Verify client config from file
 	require.Equal(t, 50, config.ClientConfig.InitialPoolSize, "InitialPoolSize from file")
-	require.Equal(t, false, config.ClientConfig.EnableLogging, "EnableLogging from file")
+	require.NotNil(t, config.ClientConfig.EnableLogging, "EnableLogging should not be nil")
+	require.Equal(t, false, *config.ClientConfig.EnableLogging, "EnableLogging from file")
 	require.Equal(t, 200, config.ClientConfig.MaxRequestBodySizeMB, "MaxRequestBodySizeMB from file")
 
 	// Verify providers auto-detected (no providers in file)
@@ -16945,7 +17117,7 @@ func TestLoadConfig_PartialConfigFile_OnlyGovernance(t *testing.T) {
 	require.Equal(t, 500.0, config.GovernanceConfig.Budgets[0].MaxLimit)
 
 	// Verify client config gets defaults
-	assertDefaultClientConfigValues(t, config.ClientConfig)
+	assertDefaultClientConfigValues(t, *config.ClientConfig)
 }
 
 // TestLoadConfig_PartialConfigFile_OnlyPlugins tests config.json with only plugins section
@@ -16972,7 +17144,7 @@ func TestLoadConfig_PartialConfigFile_OnlyPlugins(t *testing.T) {
 	require.Equal(t, "my-plugin", config.PluginConfigs[0].Name)
 
 	// Verify client gets defaults
-	assertDefaultClientConfigValues(t, config.ClientConfig)
+	assertDefaultClientConfigValues(t, *config.ClientConfig)
 }
 
 // TestLoadConfig_PartialConfigFile_OnlyMCP tests config.json with only MCP section
@@ -17001,7 +17173,7 @@ func TestLoadConfig_PartialConfigFile_OnlyMCP(t *testing.T) {
 	require.Equal(t, "mcp_test", config.MCPConfig.ClientConfigs[0].Name)
 
 	// Verify client gets defaults
-	assertDefaultClientConfigValues(t, config.ClientConfig)
+	assertDefaultClientConfigValues(t, *config.ClientConfig)
 }
 
 // TestLoadConfig_PartialConfigFile_ClientAndProviders tests the most common minimal config
@@ -17013,7 +17185,7 @@ func TestLoadConfig_PartialConfigFile_ClientAndProviders(t *testing.T) {
 	configData := makeMinimalConfigData(tempDir)
 	configData.Client = &configstore.ClientConfig{
 		InitialPoolSize:      100,
-		EnableLogging:        true,
+		EnableLogging:        new(true),
 		MaxRequestBodySizeMB: 50,
 		AllowedOrigins:       []string{"*"},
 	}
@@ -17227,7 +17399,7 @@ func TestLoadConfig_DefaultClientConfig_Values(t *testing.T) {
 	require.NotNil(t, config)
 	defer config.Close(ctx)
 
-	assertDefaultClientConfigValues(t, config.ClientConfig)
+	assertDefaultClientConfigValues(t, *config.ClientConfig)
 }
 
 // TestLoadConfig_PartialClientConfig_DefaultsFillGaps tests that missing client fields get defaults
@@ -17240,7 +17412,7 @@ func TestLoadConfig_PartialClientConfig_DefaultsFillGaps(t *testing.T) {
 	// Only set InitialPoolSize, leave MaxRequestBodySizeMB as 0 (should get default)
 	configData.Client = &configstore.ClientConfig{
 		InitialPoolSize: 50,
-		EnableLogging:   true,
+		EnableLogging:   new(true),
 		AllowedOrigins:  []string{"http://myapp.com"},
 		// MaxRequestBodySizeMB is 0 -> should get default 100
 	}
@@ -17254,7 +17426,8 @@ func TestLoadConfig_PartialClientConfig_DefaultsFillGaps(t *testing.T) {
 
 	// Verify explicit values from file
 	require.Equal(t, 50, config.ClientConfig.InitialPoolSize, "InitialPoolSize from file")
-	require.Equal(t, true, config.ClientConfig.EnableLogging, "EnableLogging from file")
+	require.NotNil(t, config.ClientConfig.EnableLogging, "EnableLogging should not be nil")
+	require.Equal(t, true, *config.ClientConfig.EnableLogging, "EnableLogging from file")
 
 	// Verify zero-value fields get defaults
 	require.Equal(t, DefaultClientConfig.MaxRequestBodySizeMB, config.ClientConfig.MaxRequestBodySizeMB,

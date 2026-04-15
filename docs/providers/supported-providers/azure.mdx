@@ -37,6 +37,20 @@ Azure is a cloud provider offering access to OpenAI and Anthropic models through
 **Azure-specific**: Batch operations and Text Completions are not supported by Azure OpenAI Service. Responses API uses preview API version and is available for both OpenAI and Anthropic models.
 </Note>
 
+## Beta Headers
+
+For Anthropic models on Azure, Bifrost validates `anthropic-beta` headers and drops unsupported headers from the request. Azure supports most Anthropic beta features.
+
+**Supported**: `computer-use-*`, `structured-outputs-*`, `advanced-tool-use-*`, `mcp-client-*`, `prompt-caching-scope-*`, `compact-*`, `context-management-*`, `files-api-*`, `interleaved-thinking-*`, `skills-*`, `context-1m-*`, `redact-thinking-*`
+
+**Not supported**: `fast-mode-*`
+
+You can override these defaults per provider via the **Beta Headers** tab in provider configuration or via [`beta_header_overrides`](/quickstart/gateway/provider-configuration#beta-header-overrides). See the full support matrix in the [Anthropic provider docs](/providers/supported-providers/anthropic#beta-headers).
+
+<Frame>
+  <img src="/media/azure-setting-anthropic-beta-headers.png" alt="Azure Beta Headers configuration tab showing supported and unsupported Anthropic beta features with override options" />
+</Frame>
+
 ---
 
 # 1. Chat Completions
@@ -102,12 +116,12 @@ detects the auth environment.
 
 ```json
 {
+  "aliases": {
+    "gpt-4": "my-gpt4-deployment"
+  },
   "azure_key_config": {
     "endpoint": "https://your-org.openai.azure.com",
-    "api_version": "2024-10-21",
-    "deployments": {
-      "gpt-4": "my-gpt4-deployment"
-    }
+    "api_version": "2024-10-21"
   }
 }
 ```
@@ -118,18 +132,18 @@ If you set `client_id`, `client_secret`, and `tenant_id`, Azure Entra ID authent
 
 ```json
 {
+  "aliases": {
+    "gpt-4": "my-gpt4-deployment",
+    "gpt-4-turbo": "my-gpt4-turbo-deployment",
+    "claude-3": "my-claude-deployment"
+  },
   "azure_key_config": {
     "endpoint": "https://your-org.openai.azure.com",
     "client_id": "your-client-id",
     "client_secret": "your-client-secret",
     "tenant_id": "your-tenant-id",
     "scopes": ["https://cognitiveservices.azure.com/.default"],
-    "api_version": "2024-10-21",
-    "deployments": {
-      "gpt-4": "my-gpt4-deployment",
-      "gpt-4-turbo": "my-gpt4-turbo-deployment",
-      "claude-3": "my-claude-deployment"
-    }
+    "api_version": "2024-10-21"
   }
 }
 ```
@@ -142,14 +156,15 @@ If you set `client_id`, `client_secret`, and `tenant_id`, Azure Entra ID authent
 
 ```json
 {
+  "value": "your-azure-api-key",
+  "aliases": {
+    "gpt-4": "my-gpt4-deployment",
+    "gpt-4-turbo": "my-gpt4-turbo-deployment",
+    "claude-3": "my-claude-deployment"
+  },
   "azure_key_config": {
     "endpoint": "https://your-org.openai.azure.com",
-    "api_version": "2024-10-21",
-    "deployments": {
-      "gpt-4": "my-gpt4-deployment",
-      "gpt-4-turbo": "my-gpt4-turbo-deployment",
-      "claude-3": "my-claude-deployment"
-    }
+    "api_version": "2024-10-21"
   }
 }
 ```
@@ -161,7 +176,7 @@ If you set `client_id`, `client_secret`, and `tenant_id`, Azure Entra ID authent
 - `tenant_id` - Azure Entra ID tenant ID (optional, for Service Principal auth)
 - `scopes` - OAuth scopes for token requests (default: `["https://cognitiveservices.azure.com/.default"]`)
 - `api_version` - API version to use (default: `2024-10-21`)
-- `deployments` - Map of model names to deployment IDs (optional, can be provided per-request)
+- `aliases` - Map of model names to Azure deployment IDs (optional, set at key level)
 - `allowed_models` - List of allowed models to use from this key (optional)
 
 ### Deployment Selection
@@ -175,7 +190,7 @@ Deployments can be specified at three levels (in order of precedence):
 
 2. **Key configuration**
    ```json
-   {"deployments": {"gpt-4": "my-gpt4-deployment"}}
+   {"aliases": {"gpt-4": "my-gpt4-deployment"}}
    ```
 
 3. **Model name** (lowest priority, if no deployment specified)

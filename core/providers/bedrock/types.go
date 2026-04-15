@@ -10,6 +10,12 @@ import (
 
 // DefaultBedrockRegion is the default region for Bedrock
 const DefaultBedrockRegion = "us-east-1"
+
+// bedrockSigningService is the SigV4 service name used when signing all Bedrock
+// API requests. AWS requires "bedrock" as the credential scope service for both
+// bedrock-runtime and bedrock-agent-runtime endpoints.
+const bedrockSigningService = "bedrock"
+
 const MinimumReasoningMaxTokens = 1
 const DefaultCompletionMaxTokens = 4096 // Only used for relative reasoning max token calculation - not passed in body by default
 
@@ -239,8 +245,8 @@ type BedrockDocumentSourceData struct {
 
 // BedrockToolUse represents a tool use request
 type BedrockToolUse struct {
-	ToolUseID string      `json:"toolUseId"` // Required: Unique identifier for this tool use
-	Name      string      `json:"name"`      // Required: Name of the tool to use
+	ToolUseID string          `json:"toolUseId"` // Required: Unique identifier for this tool use
+	Name      string          `json:"name"`      // Required: Name of the tool to use
 	Input     json.RawMessage `json:"input"`     // Required: Input parameters for the tool (json.RawMessage preserves key ordering for prompt caching)
 }
 
@@ -658,7 +664,7 @@ func (req *BedrockTitanEmbeddingRequest) GetExtraParams() map[string]interface{}
 
 // BedrockTitanEmbeddingResponse represents a Bedrock Titan embedding response
 type BedrockTitanEmbeddingResponse struct {
-	Embedding           []float32 `json:"embedding"`           // The embedding vector
+	Embedding           []float64 `json:"embedding"`           // The embedding vector
 	InputTextTokenCount int       `json:"inputTextTokenCount"` // Number of tokens in input
 }
 
