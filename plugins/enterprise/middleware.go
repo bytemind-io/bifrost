@@ -20,20 +20,22 @@ type RoutePermission struct {
 	Prefix    string
 	Resource  Resource
 	Operation Operation
+	AnyOf     []Resource
 }
 
 // APIRoutePermissions defines the RBAC requirements for each API endpoint.
 var APIRoutePermissions = []RoutePermission{
 	// Enterprise user management
-	{Method: "GET", Prefix: "/api/enterprise/users", Resource: ResourceUsers, Operation: OpView},
+	{Method: "GET", Prefix: "/api/enterprise/users", Resource: ResourceUsers, Operation: OpView, AnyOf: []Resource{ResourceUserProvisioning}},
 	{Method: "POST", Prefix: "/api/enterprise/users", Resource: ResourceUsers, Operation: OpCreate},
 	{Method: "PUT", Prefix: "/api/enterprise/users/", Resource: ResourceUsers, Operation: OpUpdate},
 	{Method: "DELETE", Prefix: "/api/enterprise/users/", Resource: ResourceUsers, Operation: OpDelete},
 
-	// Roles management (admin-level)
-	{Method: "POST", Prefix: "/api/roles", Resource: ResourceUsers, Operation: OpCreate},
-	{Method: "PUT", Prefix: "/api/roles/", Resource: ResourceUsers, Operation: OpUpdate},
-	{Method: "DELETE", Prefix: "/api/roles/", Resource: ResourceUsers, Operation: OpDelete},
+	// Roles management
+	{Method: "GET", Prefix: "/api/roles", Resource: ResourceRBAC, Operation: OpView, AnyOf: []Resource{ResourceUserProvisioning}},
+	{Method: "POST", Prefix: "/api/roles", Resource: ResourceRBAC, Operation: OpCreate},
+	{Method: "PUT", Prefix: "/api/roles/", Resource: ResourceRBAC, Operation: OpUpdate},
+	{Method: "DELETE", Prefix: "/api/roles/", Resource: ResourceRBAC, Operation: OpDelete},
 
 	// Audit logs
 	{Method: "GET", Prefix: "/api/enterprise/audit-logs", Resource: ResourceAuditLogs, Operation: OpView},
@@ -41,9 +43,9 @@ var APIRoutePermissions = []RoutePermission{
 	{Method: "POST", Prefix: "/api/audit-logs/query", Resource: ResourceAuditLogs, Operation: OpView},
 
 	// Team member management
-	{Method: "GET", Prefix: "/api/enterprise/teams/", Resource: ResourceUsers, Operation: OpView},
-	{Method: "POST", Prefix: "/api/enterprise/teams/", Resource: ResourceUsers, Operation: OpUpdate},
-	{Method: "DELETE", Prefix: "/api/enterprise/teams/", Resource: ResourceUsers, Operation: OpUpdate},
+	{Method: "GET", Prefix: "/api/enterprise/teams/", Resource: ResourceTeams, Operation: OpView},
+	{Method: "POST", Prefix: "/api/enterprise/teams/", Resource: ResourceTeams, Operation: OpUpdate},
+	{Method: "DELETE", Prefix: "/api/enterprise/teams/", Resource: ResourceTeams, Operation: OpUpdate},
 
 	// Governance - Virtual keys
 	{Method: "GET", Prefix: "/api/governance/virtual-keys", Resource: ResourceVirtualKeys, Operation: OpView},
@@ -52,26 +54,26 @@ var APIRoutePermissions = []RoutePermission{
 	{Method: "DELETE", Prefix: "/api/governance/virtual-keys/", Resource: ResourceVirtualKeys, Operation: OpDelete},
 
 	// Governance - Teams
-	{Method: "GET", Prefix: "/api/governance/teams", Resource: ResourceVirtualKeys, Operation: OpView},
-	{Method: "POST", Prefix: "/api/governance/teams", Resource: ResourceVirtualKeys, Operation: OpCreate},
-	{Method: "PUT", Prefix: "/api/governance/teams/", Resource: ResourceVirtualKeys, Operation: OpUpdate},
-	{Method: "DELETE", Prefix: "/api/governance/teams/", Resource: ResourceVirtualKeys, Operation: OpDelete},
+	{Method: "GET", Prefix: "/api/governance/teams", Resource: ResourceTeams, Operation: OpView, AnyOf: []Resource{ResourceUserProvisioning}},
+	{Method: "POST", Prefix: "/api/governance/teams", Resource: ResourceTeams, Operation: OpCreate},
+	{Method: "PUT", Prefix: "/api/governance/teams/", Resource: ResourceTeams, Operation: OpUpdate},
+	{Method: "DELETE", Prefix: "/api/governance/teams/", Resource: ResourceTeams, Operation: OpDelete},
 
-	// Governance - Customers (admin-level operations, use Settings resource)
-	{Method: "GET", Prefix: "/api/governance/customers", Resource: ResourceVirtualKeys, Operation: OpView},
-	{Method: "POST", Prefix: "/api/governance/customers", Resource: ResourceSettings, Operation: OpCreate},
-	{Method: "PUT", Prefix: "/api/governance/customers/", Resource: ResourceSettings, Operation: OpUpdate},
-	{Method: "DELETE", Prefix: "/api/governance/customers/", Resource: ResourceSettings, Operation: OpDelete},
+	// Governance - Customers
+	{Method: "GET", Prefix: "/api/governance/customers", Resource: ResourceCustomers, Operation: OpView},
+	{Method: "POST", Prefix: "/api/governance/customers", Resource: ResourceCustomers, Operation: OpCreate},
+	{Method: "PUT", Prefix: "/api/governance/customers/", Resource: ResourceCustomers, Operation: OpUpdate},
+	{Method: "DELETE", Prefix: "/api/governance/customers/", Resource: ResourceCustomers, Operation: OpDelete},
 
 	// Governance - Budgets & rate limits
-	{Method: "GET", Prefix: "/api/governance/budgets", Resource: ResourceVirtualKeys, Operation: OpView},
-	{Method: "GET", Prefix: "/api/governance/rate-limits", Resource: ResourceVirtualKeys, Operation: OpView},
+	{Method: "GET", Prefix: "/api/governance/budgets", Resource: ResourceGovernance, Operation: OpView},
+	{Method: "GET", Prefix: "/api/governance/rate-limits", Resource: ResourceGovernance, Operation: OpView},
 
 	// Governance - Routing rules
-	{Method: "GET", Prefix: "/api/governance/routing-rules", Resource: ResourceAdaptiveRouter, Operation: OpView},
-	{Method: "POST", Prefix: "/api/governance/routing-rules", Resource: ResourceAdaptiveRouter, Operation: OpCreate},
-	{Method: "PUT", Prefix: "/api/governance/routing-rules/", Resource: ResourceAdaptiveRouter, Operation: OpUpdate},
-	{Method: "DELETE", Prefix: "/api/governance/routing-rules/", Resource: ResourceAdaptiveRouter, Operation: OpDelete},
+	{Method: "GET", Prefix: "/api/governance/routing-rules", Resource: ResourceRoutingRules, Operation: OpView},
+	{Method: "POST", Prefix: "/api/governance/routing-rules", Resource: ResourceRoutingRules, Operation: OpCreate},
+	{Method: "PUT", Prefix: "/api/governance/routing-rules/", Resource: ResourceRoutingRules, Operation: OpUpdate},
+	{Method: "DELETE", Prefix: "/api/governance/routing-rules/", Resource: ResourceRoutingRules, Operation: OpDelete},
 
 	// Governance - Model configs & providers
 	{Method: "GET", Prefix: "/api/governance/model-configs", Resource: ResourceModelProvider, Operation: OpView},
@@ -95,7 +97,7 @@ var APIRoutePermissions = []RoutePermission{
 	{Method: "PUT", Prefix: "/api/providers/", Resource: ResourceModelProvider, Operation: OpUpdate},
 	{Method: "DELETE", Prefix: "/api/providers/", Resource: ResourceModelProvider, Operation: OpDelete},
 	{Method: "GET", Prefix: "/api/models", Resource: ResourceModelProvider, Operation: OpView},
-	{Method: "GET", Prefix: "/api/keys", Resource: ResourceModelProvider, Operation: OpView},
+	{Method: "GET", Prefix: "/api/keys", Resource: ResourceAPIKeys, Operation: OpView, AnyOf: []Resource{ResourceModelProvider}},
 
 	// Plugins
 	{Method: "GET", Prefix: "/api/plugins", Resource: ResourcePlugins, Operation: OpView},
@@ -104,9 +106,16 @@ var APIRoutePermissions = []RoutePermission{
 	{Method: "DELETE", Prefix: "/api/plugins/", Resource: ResourcePlugins, Operation: OpDelete},
 
 	// Logs
+	{Method: "GET", Prefix: "/api/logs/stats", Resource: ResourceDashboard, Operation: OpView, AnyOf: []Resource{ResourceLogs}},
+	{Method: "GET", Prefix: "/api/logs/histogram", Resource: ResourceDashboard, Operation: OpView, AnyOf: []Resource{ResourceLogs}},
+	{Method: "GET", Prefix: "/api/logs/rankings", Resource: ResourceDashboard, Operation: OpView, AnyOf: []Resource{ResourceLogs}},
+	{Method: "GET", Prefix: "/api/logs/filterdata", Resource: ResourceDashboard, Operation: OpView, AnyOf: []Resource{ResourceLogs}},
 	{Method: "GET", Prefix: "/api/logs", Resource: ResourceLogs, Operation: OpView},
 	{Method: "DELETE", Prefix: "/api/logs", Resource: ResourceLogs, Operation: OpDelete},
 	{Method: "POST", Prefix: "/api/logs/recalculate-cost", Resource: ResourceLogs, Operation: OpUpdate},
+	{Method: "GET", Prefix: "/api/mcp-logs/stats", Resource: ResourceDashboard, Operation: OpView, AnyOf: []Resource{ResourceLogs}},
+	{Method: "GET", Prefix: "/api/mcp-logs/histogram", Resource: ResourceDashboard, Operation: OpView, AnyOf: []Resource{ResourceLogs}},
+	{Method: "GET", Prefix: "/api/mcp-logs/filterdata", Resource: ResourceDashboard, Operation: OpView, AnyOf: []Resource{ResourceLogs}},
 	{Method: "GET", Prefix: "/api/mcp-logs", Resource: ResourceLogs, Operation: OpView},
 	{Method: "DELETE", Prefix: "/api/mcp-logs", Resource: ResourceLogs, Operation: OpDelete},
 
@@ -117,18 +126,22 @@ var APIRoutePermissions = []RoutePermission{
 	{Method: "PUT", Prefix: "/api/mcp/client/", Resource: ResourceMCPGateway, Operation: OpUpdate},
 	{Method: "DELETE", Prefix: "/api/mcp/client/", Resource: ResourceMCPGateway, Operation: OpDelete},
 
-	// Prompt repo (uses Plugins resource)
-	{Method: "GET", Prefix: "/api/prompt-repo/", Resource: ResourcePlugins, Operation: OpView},
-	{Method: "POST", Prefix: "/api/prompt-repo/", Resource: ResourcePlugins, Operation: OpCreate},
-	{Method: "PUT", Prefix: "/api/prompt-repo/", Resource: ResourcePlugins, Operation: OpUpdate},
-	{Method: "DELETE", Prefix: "/api/prompt-repo/", Resource: ResourcePlugins, Operation: OpDelete},
+	// Prompt repo
+	{Method: "GET", Prefix: "/api/prompt-repo/prompts", Resource: ResourcePromptRepository, Operation: OpView},
+	{Method: "POST", Prefix: "/api/prompt-repo/prompts", Resource: ResourcePromptRepository, Operation: OpCreate},
+	{Method: "PUT", Prefix: "/api/prompt-repo/prompts", Resource: ResourcePromptRepository, Operation: OpUpdate},
+	{Method: "DELETE", Prefix: "/api/prompt-repo/prompts", Resource: ResourcePromptRepository, Operation: OpDelete},
+	{Method: "GET", Prefix: "/api/prompt-repo/deployments", Resource: ResourcePromptDeploymentStrategy, Operation: OpView},
+	{Method: "POST", Prefix: "/api/prompt-repo/deployments", Resource: ResourcePromptDeploymentStrategy, Operation: OpCreate},
+	{Method: "PUT", Prefix: "/api/prompt-repo/deployments", Resource: ResourcePromptDeploymentStrategy, Operation: OpUpdate},
+	{Method: "DELETE", Prefix: "/api/prompt-repo/deployments", Resource: ResourcePromptDeploymentStrategy, Operation: OpDelete},
 
 	// OAuth
-	{Method: "GET", Prefix: "/api/oauth/", Resource: ResourceSettings, Operation: OpView},
-	{Method: "DELETE", Prefix: "/api/oauth/", Resource: ResourceSettings, Operation: OpDelete},
+	{Method: "GET", Prefix: "/api/oauth/", Resource: ResourceInvitations, Operation: OpView},
+	{Method: "DELETE", Prefix: "/api/oauth/", Resource: ResourceInvitations, Operation: OpDelete},
 
 	// Cache
-	{Method: "DELETE", Prefix: "/api/cache/", Resource: ResourceSettings, Operation: OpDelete},
+	{Method: "DELETE", Prefix: "/api/cache/", Resource: ResourceGovernance, Operation: OpDelete},
 }
 
 // CheckRoutePermission checks if a role has permission for the given HTTP method + path.
@@ -150,7 +163,6 @@ func CheckRoutePermission(roleStore *RoleStore, roleName string, method, path st
 		"/api/enterprise/logout",
 		"/api/enterprise/permissions",
 		"/api/enterprise/me",
-		"/api/config",
 		"/api/version",
 		"/ws",
 		"/health",
@@ -161,20 +173,18 @@ func CheckRoutePermission(roleStore *RoleStore, roleName string, method, path st
 		}
 	}
 
-	// GET-only public endpoints (any authenticated user can read)
-	if method == "GET" {
-		readOnlyPublic := []string{"/api/roles", "/api/enterprise/roles"}
-		for _, p := range readOnlyPublic {
-			if strings.HasPrefix(path, p) {
-				return true
-			}
-		}
-	}
-
 	// Check against route permissions
 	for _, rp := range APIRoutePermissions {
 		if rp.Method == method && strings.HasPrefix(path, rp.Prefix) {
-			return roleStore.IsAllowed(roleName, rp.Resource, rp.Operation)
+			if roleStore.IsAllowed(roleName, rp.Resource, rp.Operation) {
+				return true
+			}
+			for _, resource := range rp.AnyOf {
+				if roleStore.IsAllowed(roleName, resource, rp.Operation) {
+					return true
+				}
+			}
+			return false
 		}
 	}
 

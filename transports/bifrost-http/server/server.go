@@ -1026,7 +1026,7 @@ func (s *BifrostHTTPServer) RegisterAPIRoutes(ctx context.Context, callbacks Ser
 	mcpHandler := handlers.NewMCPHandler(callbacks, s.Client, s.Config, oauthHandler)
 	configHandler := handlers.NewConfigHandler(callbacks, s.Config)
 	pluginsHandler := handlers.NewPluginsHandler(callbacks, s.Config.ConfigStore)
-	sessionHandler := handlers.NewSessionHandler(s.Config.ConfigStore, s.WSTicketStore, s.EnterpriseHandler != nil)
+	sessionHandler := handlers.NewSessionHandler(s.Config.ConfigStore, s.WSTicketStore, s.EnterpriseHandler != nil, s.EnterpriseHandler)
 	promptsHandler := handlers.NewPromptsHandler(s.Config.ConfigStore)
 	// Going ahead with API handlers
 	healthHandler.RegisterRoutes(s.Router, middlewares...)

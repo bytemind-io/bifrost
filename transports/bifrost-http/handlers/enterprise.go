@@ -68,16 +68,18 @@ func (h *EnterpriseHandler) audit(ctx *fasthttp.RequestCtx, action, resource, re
 }
 
 // auditAuth emits an authentication audit event.
-func (h *EnterpriseHandler) auditAuth(ctx *fasthttp.RequestCtx, action, status, severity, userID, email, details string) {
+func (h *EnterpriseHandler) auditAuth(ctx *fasthttp.RequestCtx, action, status, severity, userID, email, resource, resourceID, details string) {
 	h.auditStore.Emit(enterprise.AuditEvent{
-		EventType: enterprise.EventTypeAuthentication,
-		Action:    action,
-		Status:    status,
-		Severity:  severity,
-		UserID:    userID,
-		UserEmail: email,
-		IP:        ctx.RemoteAddr().String(),
-		Details:   details,
+		EventType:  enterprise.EventTypeAuthentication,
+		Action:     action,
+		Status:     status,
+		Severity:   severity,
+		UserID:     userID,
+		UserEmail:  email,
+		IP:         ctx.RemoteAddr().String(),
+		Resource:   resource,
+		ResourceID: resourceID,
+		Details:    details,
 	})
 }
 
@@ -166,6 +168,9 @@ func (h *EnterpriseHandler) isWhitelisted(path, method string) bool {
 // auditMutation records audit events for successful write operations.
 func (h *EnterpriseHandler) auditMutation(ctx *fasthttp.RequestCtx, method, path string) {
 	if method != "POST" && method != "PUT" && method != "DELETE" {
+		return
+	}
+	if path == "/api/enterprise/login" || path == "/api/enterprise/logout" {
 		return
 	}
 	if ctx.Response.StatusCode() < 200 || ctx.Response.StatusCode() >= 300 {
@@ -297,21 +302,21 @@ func (h *EnterpriseHandler) login(ctx *fasthttp.RequestCtx) {
 	if err != nil || user == nil {
 		// Fall through — let the caller try /api/session/login for admin config auth
 		h.auditAuth(ctx, "user_login", enterprise.StatusFailed, enterprise.SeverityMedium,
-			"", payload.Username, `{"reason":"user_not_found"}`)
+			"", payload.Username, "login", "", `{"reason":"user_not_found"}`)
 		SendError(ctx, fasthttp.StatusUnauthorized, "Invalid username or password")
 		return
 	}
 
 	if !user.IsActive {
 		h.auditAuth(ctx, "user_login", enterprise.StatusBlocked, enterprise.SeverityHigh,
-			user.ID, user.Email, `{"reason":"account_disabled"}`)
+			user.ID, user.Email, "login", "", `{"reason":"account_disabled"}`)
 		SendError(ctx, fasthttp.StatusForbidden, "Account is disabled")
 		return
 	}
 
 	if !h.userStore.ValidatePassword(user, payload.Password) {
 		h.auditAuth(ctx, "user_login", enterprise.StatusFailed, enterprise.SeverityMedium,
-			user.ID, user.Email, `{"reason":"invalid_password"}`)
+			user.ID, user.Email, "login", "", `{"reason":"invalid_password"}`)
 		SendError(ctx, fasthttp.StatusUnauthorized, "Invalid username or password")
 		return
 	}
@@ -353,7 +358,7 @@ func (h *EnterpriseHandler) login(ctx *fasthttp.RequestCtx) {
 
 	// Record login audit
 	h.auditAuth(ctx, "user_login", enterprise.StatusSuccess, enterprise.SeverityLow,
-		user.ID, user.Email, fmt.Sprintf(`{"role":%q}`, user.Role))
+		user.ID, user.Email, "login", "", fmt.Sprintf(`{"role":%q}`, user.Role))
 
 	SendJSON(ctx, map[string]interface{}{
 		"message": "Login successful",
@@ -393,7 +398,7 @@ func (h *EnterpriseHandler) logout(ctx *fasthttp.RequestCtx) {
 		// Record audit before cleaning up
 		_, userEmail, _, _ := enterprise.ExtractUserFromContext(ctx)
 		if userEmail != "" {
-			h.audit(ctx, "logout", "session", "", "")
+			h.auditAuth(ctx, "user_logout", enterprise.StatusSuccess, enterprise.SeverityLow, "", userEmail, "session", "", "")
 		}
 		// Clean up enterprise user-session mapping
 		_ = h.userStore.DeleteUserSessionByTokenHash(ctx, tokenHash)
@@ -850,13 +855,6 @@ func (h *EnterpriseHandler) getMyPermissions(ctx *fasthttp.RequestCtx) {
 // =====================
 
 func (h *EnterpriseHandler) queryAuditLogs(ctx *fasthttp.RequestCtx) {
-	// Audit logs are admin-only (immutable, compliance-critical)
-	_, _, role, _ := enterprise.ExtractUserFromContext(ctx)
-	if !strings.EqualFold(role, "Admin") && role != "" {
-		SendError(ctx, fasthttp.StatusForbidden, "Audit logs are restricted to administrators")
-		return
-	}
-
 	q := enterprise.AuditLogQuery{
 		EventType: string(ctx.QueryArgs().Peek("event_type")),
 		Action:    string(ctx.QueryArgs().Peek("action")),
@@ -893,11 +891,6 @@ func (h *EnterpriseHandler) queryAuditLogs(ctx *fasthttp.RequestCtx) {
 }
 
 func (h *EnterpriseHandler) advancedQueryAuditLogs(ctx *fasthttp.RequestCtx) {
-	_, _, role, _ := enterprise.ExtractUserFromContext(ctx)
-	if !strings.EqualFold(role, "Admin") && role != "" {
-		SendError(ctx, fasthttp.StatusForbidden, "Audit logs are restricted to administrators")
-		return
-	}
 	var body struct {
 		Filters struct {
 			EventTypes []string `json:"event_types"`
@@ -962,11 +955,6 @@ func (h *EnterpriseHandler) advancedQueryAuditLogs(ctx *fasthttp.RequestCtx) {
 }
 
 func (h *EnterpriseHandler) auditLogStats(ctx *fasthttp.RequestCtx) {
-	_, _, role, _ := enterprise.ExtractUserFromContext(ctx)
-	if !strings.EqualFold(role, "Admin") && role != "" {
-		SendError(ctx, fasthttp.StatusForbidden, "Audit logs are restricted to administrators")
-		return
-	}
 	stats, err := h.auditStore.Stats(ctx)
 	if err != nil {
 		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to get stats: %v", err))

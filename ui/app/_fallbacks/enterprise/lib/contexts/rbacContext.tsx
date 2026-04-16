@@ -46,6 +46,8 @@ interface RbacContextType {
 	isAllowed: (resource: RbacResource, operation: RbacOperation) => boolean;
 	permissions: Record<string, Record<string, boolean>>;
 	isLoading: boolean;
+	loaded: boolean;
+	role?: string;
 	refetch: () => void;
 }
 
@@ -59,6 +61,8 @@ export function RbacProvider({ children }: { children: React.ReactNode }) {
 				isAllowed: () => true, // Always allow in OSS
 				permissions: {},
 				isLoading: false,
+				loaded: true,
+				role: "Admin",
 				refetch: () => {},
 			}}
 		>
@@ -81,6 +85,8 @@ export function useRbacContext() {
 			isAllowed: () => true,
 			permissions: {},
 			isLoading: false,
+			loaded: true,
+			role: "Admin",
 			refetch: () => {},
 		};
 	}

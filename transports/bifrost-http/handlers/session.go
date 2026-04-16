@@ -22,14 +22,21 @@ type SessionHandler struct {
 	configStore       configstore.ConfigStore
 	wsTicketStore     *WSTicketStore
 	enterpriseEnabled bool
+	enterpriseHandler *EnterpriseHandler
 }
 
 // NewSessionHandler creates a new session handler instance
-func NewSessionHandler(configStore configstore.ConfigStore, wsTicketStore *WSTicketStore, enterpriseEnabled bool) *SessionHandler {
+func NewSessionHandler(
+	configStore configstore.ConfigStore,
+	wsTicketStore *WSTicketStore,
+	enterpriseEnabled bool,
+	enterpriseHandler *EnterpriseHandler,
+) *SessionHandler {
 	return &SessionHandler{
 		configStore:       configStore,
 		wsTicketStore:     wsTicketStore,
 		enterpriseEnabled: enterpriseEnabled,
+		enterpriseHandler: enterpriseHandler,
 	}
 }
 
@@ -45,7 +52,8 @@ func (h *SessionHandler) RegisterRoutes(r *router.Router, middlewares ...schemas
 func (h *SessionHandler) isAuthEnabled(ctx *fasthttp.RequestCtx) {
 	if h.configStore == nil {
 		SendJSON(ctx, map[string]any{
-			"is_auth_enabled": false,
+			"is_auth_enabled": h.enterpriseEnabled,
+			"has_valid_token": false,
 		})
 		return
 	}
@@ -56,7 +64,8 @@ func (h *SessionHandler) isAuthEnabled(ctx *fasthttp.RequestCtx) {
 	}
 	if authConfig == nil {
 		SendJSON(ctx, map[string]any{
-			"is_auth_enabled": false,
+			"is_auth_enabled": h.enterpriseEnabled,
+			"has_valid_token": false,
 		})
 		return
 	}
@@ -85,6 +94,10 @@ func (h *SessionHandler) isAuthEnabled(ctx *fasthttp.RequestCtx) {
 // login handles POST /api/session/login - Login a user
 func (h *SessionHandler) login(ctx *fasthttp.RequestCtx) {
 	if h.configStore == nil {
+		if h.enterpriseHandler != nil {
+			h.enterpriseHandler.login(ctx)
+			return
+		}
 		SendError(ctx, fasthttp.StatusForbidden, "Authentication is not enabled")
 		return
 	}
@@ -104,9 +117,23 @@ func (h *SessionHandler) login(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	// Check if auth is enabled
+	// When dashboard auth is disabled, only enterprise login is available.
 	if authConfig == nil || !authConfig.IsEnabled {
-		SendError(ctx, fasthttp.StatusForbidden, "Authentication is not enabled")
+		// Still allow the configured admin user to log in
+		if authConfig != nil && payload.Username == authConfig.AdminUserName.GetValue() {
+			// Fall through to admin credential check below
+		} else if h.enterpriseHandler != nil {
+			h.enterpriseHandler.login(ctx)
+			return
+		} else {
+			SendError(ctx, fasthttp.StatusForbidden, "Authentication is not enabled")
+			return
+		}
+	}
+
+	// If the request is not targeting the configured admin user, let enterprise auth handle it.
+	if h.enterpriseHandler != nil && payload.Username != authConfig.AdminUserName.GetValue() {
+		h.enterpriseHandler.login(ctx)
 		return
 	}
 
@@ -191,6 +218,12 @@ func (h *SessionHandler) logout(ctx *fasthttp.RequestCtx) {
 
 	// delete session from database if token exists
 	if token != "" {
+		if h.enterpriseHandler != nil && h.enterpriseHandler.userStore != nil {
+			tokenHash := encrypt.HashSHA256(token)
+			if err := h.enterpriseHandler.userStore.DeleteUserSessionByTokenHash(ctx, tokenHash); err != nil {
+				logger.Warn("failed to delete enterprise user-session mapping during logout: %v", err)
+			}
+		}
 		err := h.configStore.DeleteSession(ctx, token)
 		if err != nil && !errors.Is(err, configstore.ErrNotFound) {
 			logger.Error("failed to delete session during logout: %v", err)

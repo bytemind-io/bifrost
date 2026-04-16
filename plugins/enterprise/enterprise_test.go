@@ -336,17 +336,17 @@ func TestCheckRoutePermission_EdgeCases(t *testing.T) {
 	if !CheckRoutePermission(store, "Viewer", "GET", "/health") {
 		t.Error("/health should be whitelisted for all")
 	}
-	if !CheckRoutePermission(store, "Viewer", "GET", "/api/providers") {
-		t.Error("Viewer should be able to read providers")
+	if !CheckRoutePermission(store, "Viewer", "GET", "/api/logs") {
+		t.Error("Viewer should be able to read logs")
 	}
-	if CheckRoutePermission(store, "Viewer", "DELETE", "/api/providers/openai") {
-		t.Error("Viewer should NOT be able to delete providers")
+	if !CheckRoutePermission(store, "Viewer", "GET", "/api/audit-logs?limit=1") {
+		t.Error("Viewer should be able to read audit logs")
 	}
-	if !CheckRoutePermission(store, "Viewer", "GET", "/api/governance/routing-rules") {
-		t.Error("Viewer should be able to read routing rules")
+	if CheckRoutePermission(store, "Viewer", "GET", "/api/providers") {
+		t.Error("Viewer should NOT be able to read providers")
 	}
-	if CheckRoutePermission(store, "Viewer", "POST", "/api/governance/routing-rules") {
-		t.Error("Viewer should NOT be able to create routing rules")
+	if CheckRoutePermission(store, "Viewer", "GET", "/api/governance/routing-rules") {
+		t.Error("Viewer should NOT be able to read routing rules")
 	}
 }
 

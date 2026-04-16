@@ -148,9 +148,9 @@ test.describe('Enterprise RBAC E2E', () => {
     expect(data.permissions.VirtualKeys.Create).toBe(true)
     expect(data.permissions.Settings.Update).toBe(false)
 
-    // Developer cannot access audit logs
+    // Developer can view audit logs, but still has no settings update access
     const auditRes = await authGet(request, '/api/audit-logs?limit=1', devCookie)
-    expect(auditRes.status()).toBe(403)
+    expect(auditRes.ok()).toBeTruthy()
 
     // Cleanup
     await authDelete(request, `/api/enterprise/users/${user.id}`, adminCookie)
@@ -169,9 +169,17 @@ test.describe('Enterprise RBAC E2E', () => {
     const user = await createRes.json()
     const viewerCookie = await login(request, 'e2e-viewer@test.com', 'testpass123')
 
-    // Viewer can read VKs
+    // Viewer can read logs
+    const logsRes = await authGet(request, '/api/logs?limit=1', viewerCookie)
+    expect(logsRes.ok()).toBeTruthy()
+
+    // Viewer can read audit logs
+    const auditRes = await authGet(request, '/api/audit-logs?limit=1', viewerCookie)
+    expect(auditRes.ok()).toBeTruthy()
+
+    // Viewer cannot read governance resources
     const vkRes = await authGet(request, '/api/governance/virtual-keys', viewerCookie)
-    expect(vkRes.ok()).toBeTruthy()
+    expect(vkRes.status()).toBe(403)
 
     // Viewer cannot create VK
     const createVkRes = await authPost(request, '/api/governance/virtual-keys', viewerCookie, {
@@ -185,6 +193,178 @@ test.describe('Enterprise RBAC E2E', () => {
 
     // Cleanup
     await authDelete(request, `/api/enterprise/users/${user.id}`, adminCookie)
+  })
+
+  test('viewer: workspace navigation only shows permitted pages', async ({ request, page }) => {
+    const email = `e2e-viewer-ui-${Date.now()}@test.com`
+    const password = 'testpass123'
+
+    const createRes = await authPost(request, '/api/enterprise/users', adminCookie, {
+      email,
+      name: 'E2E Viewer UI',
+      password,
+      role: 'Viewer',
+    })
+    expect(createRes.ok()).toBeTruthy()
+    const user = await createRes.json()
+
+    await page.goto('/login')
+    await page.getByLabel(/username/i).fill(email)
+    await page.getByRole('textbox', { name: /^password$/i }).fill(password)
+    await page.getByRole('button', { name: /login|sign in/i }).click()
+
+    await page.waitForURL(/\/workspace(\/dashboard)?/)
+
+    await expect(page.locator('[data-nav-url="/workspace/dashboard"]')).toBeVisible()
+    await expect(page.locator('[data-nav-url="/workspace/logs"]')).toBeVisible()
+    await page.locator('button').filter({ hasText: 'Governance' }).click()
+    await expect(page.locator('[data-nav-url="/workspace/audit-logs"]')).toBeVisible()
+
+    await expect(page.locator('[data-nav-url="/workspace/providers"]')).toHaveCount(0)
+    await expect(page.locator('[data-nav-url="/workspace/governance/virtual-keys"]')).toHaveCount(0)
+    await expect(page.locator('[data-nav-url="/workspace/config"]')).toHaveCount(0)
+    await expect(page.locator('[data-nav-url="/workspace/plugins"]')).toHaveCount(0)
+
+    await page.goto('/workspace/governance/virtual-keys')
+    await expect(page.getByText("You don't have permission to view virtual keys")).toBeVisible()
+
+    await page.goto('/workspace/providers')
+    await expect(page.getByText("You don't have permission to view model providers")).toBeVisible()
+
+    await authDelete(request, `/api/enterprise/users/${user.id}`, adminCookie)
+  })
+
+  test('custom roles: governance navigation follows page dependencies', async ({ request, page }) => {
+    const now = Date.now()
+    const roles = {
+      usersOnly: `E2E-UsersOnly-${now}`,
+      usersWithRbac: `E2E-UsersWithRbac-${now}`,
+      teamsOnly: `E2E-TeamsOnly-${now}`,
+      customersOnly: `E2E-CustomersOnly-${now}`,
+      userProvisioningOnly: `E2E-UserProvisioningOnly-${now}`,
+      rbacOnly: `E2E-RbacOnly-${now}`,
+    }
+
+    const createRole = async (name: string, permissions: Array<{ resource: string; operation: string }>) => {
+      const createRes = await authPost(request, '/api/roles', adminCookie, {
+        name,
+        description: 'E2E dependency role',
+      })
+      expect(createRes.ok()).toBeTruthy()
+      const role = await createRes.json()
+
+      const permRes = await request.put(`${BASE}/api/roles/${role.id}/permissions`, {
+        headers: { Cookie: adminCookie, 'Content-Type': 'application/json' },
+        data: permissions,
+      })
+      expect(permRes.ok()).toBeTruthy()
+      return role
+    }
+
+    const createdRoles = await Promise.all([
+      createRole(roles.usersOnly, [{ resource: 'Users', operation: 'View' }]),
+      createRole(roles.usersWithRbac, [
+        { resource: 'Users', operation: 'View' },
+        { resource: 'RBAC', operation: 'View' },
+      ]),
+      createRole(roles.teamsOnly, [{ resource: 'Teams', operation: 'View' }]),
+      createRole(roles.customersOnly, [{ resource: 'Customers', operation: 'View' }]),
+      createRole(roles.userProvisioningOnly, [{ resource: 'UserProvisioning', operation: 'View' }]),
+      createRole(roles.rbacOnly, [{ resource: 'RBAC', operation: 'View' }]),
+    ])
+
+    const createdUsers: Array<{ id: string; email: string; password: string }> = []
+    const createUser = async (role: string, slug: string) => {
+      const email = `e2e-${slug}-${now}@test.com`
+      const password = 'testpass123'
+      const createRes = await authPost(request, '/api/enterprise/users', adminCookie, {
+        email,
+        name: `${slug} user`,
+        password,
+        role,
+      })
+      expect(createRes.ok()).toBeTruthy()
+      const user = await createRes.json()
+      createdUsers.push({ id: user.id, email, password })
+      return { id: user.id, email, password }
+    }
+
+    const users = {
+      usersOnly: await createUser(roles.usersOnly, 'users-only'),
+      usersWithRbac: await createUser(roles.usersWithRbac, 'users-with-rbac'),
+      teamsOnly: await createUser(roles.teamsOnly, 'teams-only'),
+      customersOnly: await createUser(roles.customersOnly, 'customers-only'),
+      userProvisioningOnly: await createUser(roles.userProvisioningOnly, 'user-provisioning-only'),
+      rbacOnly: await createUser(roles.rbacOnly, 'rbac-only'),
+    }
+
+    const loginUi = async (email: string, password: string) => {
+      await page.context().clearCookies()
+      await page.goto('/login')
+      await page.getByLabel(/username/i).fill(email)
+      await page.getByRole('textbox', { name: /^password$/i }).fill(password)
+      await page.getByRole('button', { name: /login|sign in/i }).click()
+      await page.waitForURL(/\/workspace/)
+    }
+
+    try {
+      await loginUi(users.usersOnly.email, users.usersOnly.password)
+      await expect(page.locator('[data-nav-url="/workspace/governance/users"]')).toBeVisible()
+      await expect(page.locator('[data-nav-url="/workspace/governance/rbac"]')).toHaveCount(0)
+      await page.goto('/workspace/governance/users')
+      await expect(page.getByRole('heading', { name: 'Users' })).toBeVisible()
+      await page.goto('/workspace/governance/rbac')
+      await expect(page.getByText("You don't have permission to view roles and permissions")).toBeVisible()
+
+      await loginUi(users.usersWithRbac.email, users.usersWithRbac.password)
+      await expect(page.locator('[data-nav-url="/workspace/governance/users"]')).toBeVisible()
+      await expect(page.locator('[data-nav-url="/workspace/governance/rbac"]')).toBeVisible()
+      await page.goto('/workspace/governance/users')
+      await expect(page.getByRole('heading', { name: 'Users' })).toBeVisible()
+      await page.goto('/workspace/governance/rbac')
+      await expect(page.getByRole('heading', { name: 'Roles & Permissions' })).toBeVisible()
+
+      await loginUi(users.teamsOnly.email, users.teamsOnly.password)
+      await expect(page.locator('[data-nav-url="/workspace/governance/teams"]')).toBeVisible()
+      await expect(page.locator('[data-nav-url="/workspace/governance/virtual-keys"]')).toHaveCount(0)
+      await expect(page.locator('[data-nav-url="/workspace/governance/customers"]')).toHaveCount(0)
+      await page.goto('/workspace/governance/teams')
+      await expect(page.getByRole('heading', { name: 'Teams' })).toBeVisible()
+      await page.goto('/workspace/governance/customers')
+      await expect(page.getByText("You don't have permission to view customers")).toBeVisible()
+
+      await loginUi(users.customersOnly.email, users.customersOnly.password)
+      await expect(page.locator('[data-nav-url="/workspace/governance/customers"]')).toBeVisible()
+      await expect(page.locator('[data-nav-url="/workspace/governance/teams"]')).toHaveCount(0)
+      await page.goto('/workspace/governance/customers')
+      await expect(page.getByRole('heading', { name: 'Customers' })).toBeVisible()
+      await page.goto('/workspace/governance/teams')
+      await expect(page.getByText("You don't have permission to view teams")).toBeVisible()
+
+      await loginUi(users.userProvisioningOnly.email, users.userProvisioningOnly.password)
+      await expect(page.locator('[data-nav-url="/workspace/scim"]')).toBeVisible()
+      await expect(page.locator('[data-nav-url="/workspace/governance/users"]')).toHaveCount(0)
+      await expect(page.locator('[data-nav-url="/workspace/governance/rbac"]')).toHaveCount(0)
+      await page.goto('/workspace/scim')
+      await expect(page.getByRole('heading', { name: 'User Provisioning' })).toBeVisible()
+      await page.goto('/workspace/governance/users')
+      await expect(page.getByText("You don't have permission to view users")).toBeVisible()
+
+      await loginUi(users.rbacOnly.email, users.rbacOnly.password)
+      await expect(page.locator('[data-nav-url="/workspace/governance/rbac"]')).toBeVisible()
+      await expect(page.locator('[data-nav-url="/workspace/governance/users"]')).toHaveCount(0)
+      await page.goto('/workspace/governance/rbac')
+      await expect(page.getByRole('heading', { name: 'Roles & Permissions' })).toBeVisible()
+      await page.goto('/workspace/scim')
+      await expect(page.getByText("You don't have permission to view user provisioning")).toBeVisible()
+    } finally {
+      for (const user of createdUsers) {
+        await authDelete(request, `/api/enterprise/users/${user.id}`, adminCookie)
+      }
+      for (const role of createdRoles) {
+        await authDelete(request, `/api/roles/${role.id}`, adminCookie)
+      }
+    }
   })
 
   test('admin: password reset works', async ({ request }) => {
@@ -293,5 +473,82 @@ test.describe('Enterprise RBAC E2E', () => {
     if (vk) await authDelete(request, `/api/governance/virtual-keys/${vk.id}`, adminCookie)
     await authDelete(request, `/api/enterprise/users/${dev.id}`, adminCookie)
     await authDelete(request, `/api/governance/teams/${team.id}`, adminCookie)
+  })
+
+  test('admin: can assign a user to a team and list team members', async ({ request }) => {
+    const now = Date.now()
+    const email = `e2e-team-member-${now}@test.com`
+
+    const teamRes = await authPost(request, '/api/governance/teams', adminCookie, {
+      name: `E2E-Team-Members-${now}`,
+    })
+    expect(teamRes.ok()).toBeTruthy()
+    const team = (await teamRes.json()).team
+
+    const userRes = await authPost(request, '/api/enterprise/users', adminCookie, {
+      email,
+      name: 'E2E Team Member',
+      password: 'testpass123',
+      role: 'Viewer',
+    })
+    expect(userRes.ok()).toBeTruthy()
+    const user = await userRes.json()
+
+    try {
+      const beforeAssignRes = await authGet(request, `/api/enterprise/users?search=${encodeURIComponent(email)}&limit=10`, adminCookie)
+      expect(beforeAssignRes.ok()).toBeTruthy()
+      const beforeAssign = await beforeAssignRes.json()
+      expect(beforeAssign.data[0].team_id).toBeFalsy()
+
+      const assignRes = await authPost(request, `/api/enterprise/teams/${team.id}/members`, adminCookie, {
+        user_id: user.id,
+      })
+      expect(assignRes.ok()).toBeTruthy()
+
+      const membersRes = await authGet(request, `/api/enterprise/teams/${team.id}/members`, adminCookie)
+      expect(membersRes.ok()).toBeTruthy()
+      const members = await membersRes.json()
+      expect(members.data.some((member: any) => member.id === user.id)).toBe(true)
+
+      const afterAssignRes = await authGet(request, `/api/enterprise/users?search=${encodeURIComponent(email)}&limit=10`, adminCookie)
+      expect(afterAssignRes.ok()).toBeTruthy()
+      const afterAssign = await afterAssignRes.json()
+      expect(afterAssign.data[0].team_id).toBe(team.id)
+    } finally {
+      await authDelete(request, `/api/enterprise/users/${user.id}`, adminCookie)
+      await authDelete(request, `/api/governance/teams/${team.id}`, adminCookie)
+    }
+  })
+
+  test('admin: customer lists its related teams', async ({ request }) => {
+    const now = Date.now()
+    const customerRes = await authPost(request, '/api/governance/customers', adminCookie, {
+      name: `E2E-Customer-${now}`,
+    })
+    expect(customerRes.ok()).toBeTruthy()
+    const customer = (await customerRes.json()).customer
+
+    const teamRes = await authPost(request, '/api/governance/teams', adminCookie, {
+      name: `E2E-Customer-Team-${now}`,
+      customer_id: customer.id,
+    })
+    expect(teamRes.ok()).toBeTruthy()
+    const team = (await teamRes.json()).team
+
+    try {
+      const customersRes = await authGet(request, `/api/governance/customers?search=${encodeURIComponent(customer.name)}&limit=20`, adminCookie)
+      expect(customersRes.ok()).toBeTruthy()
+      const customersData = await customersRes.json()
+      expect(customersData.customers.some((entry: any) => entry.id === customer.id)).toBe(true)
+
+      const teamsRes = await authGet(request, '/api/governance/teams?limit=200', adminCookie)
+      expect(teamsRes.ok()).toBeTruthy()
+      const teamsData = await teamsRes.json()
+      const relatedTeams = teamsData.teams.filter((entry: any) => entry.customer_id === customer.id)
+      expect(relatedTeams.some((entry: any) => entry.id === team.id)).toBe(true)
+    } finally {
+      await authDelete(request, `/api/governance/teams/${team.id}`, adminCookie)
+      await authDelete(request, `/api/governance/customers/${customer.id}`, adminCookie)
+    }
   })
 })

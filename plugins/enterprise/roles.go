@@ -16,20 +16,32 @@ import (
 type Resource string
 
 const (
-	ResourceLogs             Resource = "Logs"
-	ResourceModelProvider    Resource = "ModelProvider"
-	ResourceObservability    Resource = "Observability"
-	ResourcePlugins          Resource = "Plugins"
-	ResourceVirtualKeys      Resource = "VirtualKeys"
-	ResourceUserProvisioning Resource = "UserProvisioning"
-	ResourceUsers            Resource = "Users"
-	ResourceAuditLogs        Resource = "AuditLogs"
-	ResourceGuardrailsConfig Resource = "GuardrailsConfig"
-	ResourceGuardrailRules   Resource = "GuardrailRules"
-	ResourceCluster          Resource = "Cluster"
-	ResourceSettings         Resource = "Settings"
-	ResourceMCPGateway       Resource = "MCPGateway"
-	ResourceAdaptiveRouter   Resource = "AdaptiveRouter"
+	ResourceLogs                     Resource = "Logs"
+	ResourceModelProvider            Resource = "ModelProvider"
+	ResourceObservability            Resource = "Observability"
+	ResourcePlugins                  Resource = "Plugins"
+	ResourceVirtualKeys              Resource = "VirtualKeys"
+	ResourceCustomers                Resource = "Customers"
+	ResourceTeams                    Resource = "Teams"
+	ResourceRBAC                     Resource = "RBAC"
+	ResourceGovernance               Resource = "Governance"
+	ResourceUserProvisioning         Resource = "UserProvisioning"
+	ResourceUsers                    Resource = "Users"
+	ResourceAuditLogs                Resource = "AuditLogs"
+	ResourceDashboard                Resource = "Dashboard"
+	ResourceGuardrailsConfig         Resource = "GuardrailsConfig"
+	ResourceGuardrailsProviders      Resource = "GuardrailsProviders"
+	ResourceGuardrailRules           Resource = "GuardrailRules"
+	ResourcePIIRedactor              Resource = "PIIRedactor"
+	ResourceCluster                  Resource = "Cluster"
+	ResourceSettings                 Resource = "Settings"
+	ResourceAPIKeys                  Resource = "APIKeys"
+	ResourceInvitations              Resource = "Invitations"
+	ResourceMCPGateway               Resource = "MCPGateway"
+	ResourceAdaptiveRouter           Resource = "AdaptiveRouter"
+	ResourceRoutingRules             Resource = "RoutingRules"
+	ResourcePromptRepository         Resource = "PromptRepository"
+	ResourcePromptDeploymentStrategy Resource = "PromptDeploymentStrategy"
 )
 
 // AllResources lists every protected resource.
@@ -39,15 +51,27 @@ var AllResources = []Resource{
 	ResourceObservability,
 	ResourcePlugins,
 	ResourceVirtualKeys,
+	ResourceCustomers,
+	ResourceTeams,
+	ResourceRBAC,
+	ResourceGovernance,
 	ResourceUserProvisioning,
 	ResourceUsers,
 	ResourceAuditLogs,
+	ResourceDashboard,
 	ResourceGuardrailsConfig,
+	ResourceGuardrailsProviders,
 	ResourceGuardrailRules,
+	ResourcePIIRedactor,
 	ResourceCluster,
 	ResourceSettings,
+	ResourceAPIKeys,
+	ResourceInvitations,
 	ResourceMCPGateway,
 	ResourceAdaptiveRouter,
+	ResourceRoutingRules,
+	ResourcePromptRepository,
+	ResourcePromptDeploymentStrategy,
 }
 
 // Operation represents an action on a resource.
@@ -99,6 +123,12 @@ type RoleStore struct {
 	byName map[string]*TableRole                      // roleName -> role
 }
 
+type systemRoleDefinition struct {
+	name        string
+	description string
+	permissions map[Resource][]Operation
+}
+
 // NewRoleStore creates a new role store, runs migrations, seeds system roles, and loads cache.
 func NewRoleStore(db *gorm.DB) (*RoleStore, error) {
 	if err := db.AutoMigrate(&TableRole{}, &TableRolePermission{}); err != nil {
@@ -116,12 +146,12 @@ func NewRoleStore(db *gorm.DB) (*RoleStore, error) {
 
 // ---------- System role seeding ----------
 
-func (s *RoleStore) seedSystemRoles() error {
-	systemRoles := []struct {
-		name        string
-		description string
-		permissions map[Resource][]Operation
-	}{
+func permissionKey(resource Resource, operation Operation) string {
+	return string(resource) + ":" + string(operation)
+}
+
+func systemRoleDefinitions() []systemRoleDefinition {
+	return []systemRoleDefinition{
 		{
 			name:        "Admin",
 			description: "Full access to all resources and operations",
@@ -137,38 +167,115 @@ func (s *RoleStore) seedSystemRoles() error {
 			name:        "Developer",
 			description: "CRUD access to technical resources, view access to logs and cluster",
 			permissions: map[Resource][]Operation{
-				ResourceLogs:             {OpView},
-				ResourceModelProvider:    {OpView, OpCreate, OpUpdate, OpDelete},
-				ResourceObservability:    {OpView},
-				ResourcePlugins:          {OpView, OpCreate, OpUpdate, OpDelete},
-				ResourceVirtualKeys:      {OpView, OpCreate, OpUpdate, OpDelete},
-				ResourceUsers:            {OpView},
-				ResourceAuditLogs:        {OpView},
-				ResourceGuardrailsConfig: {OpView, OpCreate, OpUpdate, OpDelete},
-				ResourceGuardrailRules:   {OpView, OpCreate, OpUpdate, OpDelete},
-				ResourceCluster:          {OpView},
-				ResourceSettings:         {OpView},
-				ResourceMCPGateway:       {OpView, OpCreate, OpUpdate, OpDelete},
-				ResourceAdaptiveRouter:   {OpView},
+				ResourceLogs:                     {OpView},
+				ResourceModelProvider:            {OpView, OpCreate, OpUpdate, OpDelete},
+				ResourceObservability:            {OpView},
+				ResourcePlugins:                  {OpView, OpCreate, OpUpdate, OpDelete},
+				ResourceVirtualKeys:              {OpView, OpCreate, OpUpdate, OpDelete},
+				ResourceCustomers:                {OpView, OpCreate, OpUpdate, OpDelete},
+				ResourceTeams:                    {OpView, OpCreate, OpUpdate, OpDelete},
+				ResourceGovernance:               {OpView},
+				ResourceUsers:                    {OpView},
+				ResourceRBAC:                     {OpView},
+				ResourceAuditLogs:                {OpView},
+				ResourceDashboard:                {OpView},
+				ResourceGuardrailsConfig:         {OpView, OpCreate, OpUpdate, OpDelete},
+				ResourceGuardrailsProviders:      {OpView, OpCreate, OpUpdate, OpDelete},
+				ResourceGuardrailRules:           {OpView, OpCreate, OpUpdate, OpDelete},
+				ResourcePIIRedactor:              {OpView},
+				ResourceCluster:                  {OpView},
+				ResourceSettings:                 {OpView},
+				ResourceAPIKeys:                  {OpView},
+				ResourceMCPGateway:               {OpView, OpCreate, OpUpdate, OpDelete},
+				ResourceAdaptiveRouter:           {OpView},
+				ResourceRoutingRules:             {OpView, OpCreate, OpUpdate, OpDelete},
+				ResourcePromptRepository:         {OpView, OpCreate, OpUpdate, OpDelete},
+				ResourcePromptDeploymentStrategy: {OpView, OpCreate, OpUpdate, OpDelete},
 			},
 		},
 		{
 			name:        "Viewer",
-			description: "Read-only access to all resources",
-			permissions: func() map[Resource][]Operation {
-				p := make(map[Resource][]Operation)
-				for _, r := range AllResources {
-					p[r] = []Operation{OpView}
-				}
-				return p
-			}(),
+			description: "Read-only access to dashboard, logs, and audit logs",
+			permissions: map[Resource][]Operation{
+				ResourceDashboard: {OpView},
+				ResourceLogs:      {OpView},
+				ResourceAuditLogs: {OpView},
+			},
 		},
 	}
+}
 
-	for _, sr := range systemRoles {
+// syncSystemRole forces system role permissions to match the code definition exactly.
+// Any extra permissions (e.g. from a previous code version) are removed.
+func (s *RoleStore) syncSystemRole(role *TableRole, definition systemRoleDefinition) error {
+	updates := map[string]interface{}{
+		"description": definition.description,
+		"updated_at":  time.Now(),
+	}
+	if err := s.db.Model(&TableRole{}).Where("id = ?", role.ID).Updates(updates).Error; err != nil {
+		return fmt.Errorf("failed to update system role %s metadata: %w", definition.name, err)
+	}
+
+	var existingPerms []TableRolePermission
+	if err := s.db.Where("role_id = ?", role.ID).Find(&existingPerms).Error; err != nil {
+		return fmt.Errorf("failed to load permissions for role %s: %w", definition.name, err)
+	}
+
+	desired := make(map[string]struct{})
+	for resource, operations := range definition.permissions {
+		for _, operation := range operations {
+			desired[permissionKey(resource, operation)] = struct{}{}
+		}
+	}
+
+	existing := make(map[string]TableRolePermission)
+	for _, perm := range existingPerms {
+		key := permissionKey(Resource(perm.Resource), Operation(perm.Operation))
+		if _, seen := existing[key]; !seen {
+			existing[key] = perm
+		}
+	}
+
+	// Remove permissions not in definition
+	for key, perm := range existing {
+		if _, ok := desired[key]; ok {
+			continue
+		}
+		if err := s.db.Delete(&TableRolePermission{}, "id = ?", perm.ID).Error; err != nil {
+			return fmt.Errorf("failed to remove stale permission %s from role %s: %w", key, definition.name, err)
+		}
+	}
+
+	// Add missing permissions from definition
+	for resource, operations := range definition.permissions {
+		for _, operation := range operations {
+			key := permissionKey(resource, operation)
+			if _, ok := existing[key]; ok {
+				continue
+			}
+			perm := TableRolePermission{
+				ID:        uuid.New().String(),
+				RoleID:    role.ID,
+				Resource:  string(resource),
+				Operation: string(operation),
+			}
+			if err := s.db.Create(&perm).Error; err != nil {
+				return fmt.Errorf("failed to create permission %s for role %s: %w", key, definition.name, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *RoleStore) seedSystemRoles() error {
+	for _, sr := range systemRoleDefinitions() {
 		var existing TableRole
 		if err := s.db.Where("name = ? AND is_system = ?", sr.name, true).First(&existing).Error; err == nil {
-			continue // Already exists
+			if err := s.syncSystemRole(&existing, sr); err != nil {
+				return err
+			}
+			continue
 		}
 		role := TableRole{
 			ID:          uuid.New().String(),
@@ -264,48 +371,16 @@ func (s *RoleStore) IsAllowed(roleNameOrID string, resource Resource, operation 
 	return false
 }
 
-// frontendResourceAliases maps additional frontend resource names to backend resources.
-// The frontend sidebar checks these resources; we derive their permissions from related backend resources.
-var frontendResourceAliases = map[string]Resource{
-	"Customers":                ResourceVirtualKeys,      // Customers are part of VK governance
-	"Teams":                    ResourceVirtualKeys,      // Teams are part of VK governance
-	"RBAC":                     ResourceUsers,            // RBAC management requires Users access
-	"Governance":               ResourceVirtualKeys,      // Governance parent menu
-	"RoutingRules":             ResourceAdaptiveRouter,   // Routing rules use AdaptiveRouter
-	"GuardrailsProviders":      ResourceGuardrailsConfig, // Guardrails providers use same resource
-	"GuardrailRules":           ResourceGuardrailRules,   // Direct mapping (already in AllResources but frontend uses this key)
-	"PIIRedactor":              ResourceGuardrailsConfig, // PII redactor is part of guardrails
-	"PromptRepository":         ResourcePlugins,          // Prompts are managed as plugins
-	"PromptDeploymentStrategy": ResourcePlugins,          // Prompt deployments are part of plugins
-	"APIKeys":                  ResourceSettings,         // API keys are settings-level
-	"Invitations":              ResourceUsers,            // Invitations relate to users
-	"Dashboard":                ResourceObservability,    // Dashboard is observability
-}
-
 // GetPermissionsMap returns a flat map of resource->operation->bool for frontend RBAC context.
-// Includes both backend resources and frontend-specific aliases.
 func (s *RoleStore) GetPermissionsMap(roleNameOrID string) map[string]map[string]bool {
 	result := make(map[string]map[string]bool)
 
-	// Backend resources
 	for _, res := range AllResources {
 		resMap := make(map[string]bool)
 		for _, op := range AllOperations {
 			resMap[string(op)] = s.IsAllowed(roleNameOrID, res, op)
 		}
 		result[string(res)] = resMap
-	}
-
-	// Frontend aliases — derive from mapped backend resource
-	for alias, backendRes := range frontendResourceAliases {
-		if _, exists := result[alias]; exists {
-			continue // Don't overwrite if already present
-		}
-		resMap := make(map[string]bool)
-		for _, op := range AllOperations {
-			resMap[string(op)] = s.IsAllowed(roleNameOrID, backendRes, op)
-		}
-		result[alias] = resMap
 	}
 
 	return result
@@ -425,11 +500,18 @@ func (s *RoleStore) GetRolePermissions(ctx context.Context, roleID string) ([]Ta
 	return perms, nil
 }
 
-// SetRolePermissions replaces all permissions for a role.
+// SetRolePermissions replaces all permissions for a role. System roles cannot be modified.
 func (s *RoleStore) SetRolePermissions(ctx context.Context, roleID string, permissions []struct {
 	Resource  string `json:"resource"`
 	Operation string `json:"operation"`
 }) error {
+	role, err := s.GetRole(ctx, roleID)
+	if err != nil {
+		return fmt.Errorf("role not found: %w", err)
+	}
+	if role.IsSystem {
+		return fmt.Errorf("cannot modify permissions of system role %q", role.Name)
+	}
 	// Delete existing
 	if err := s.db.WithContext(ctx).Where("role_id = ?", roleID).Delete(&TableRolePermission{}).Error; err != nil {
 		return err

@@ -10,6 +10,7 @@ import { useTheme } from "next-themes";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { IS_ENTERPRISE } from "@/lib/constants/config";
 
 const externalLinks = [
 	{
@@ -56,15 +57,20 @@ export default function LoginView() {
 		}
 		if (isAuthEnabledError) {
 			setErrorMessage("Unable to verify authentication status. Please retry.");
+			setIsCheckingAuth(false);
 			return;
 		}
-		if (!isAuthEnabled || hasValidToken) {
-			router.push("/workspace");
+		if (hasValidToken) {
+			router.replace("/workspace");
+			return;
+		}
+		if (!isAuthEnabled && !IS_ENTERPRISE) {
+			router.replace("/workspace");
 			return;
 		}
 		// Auth is enabled but user is not logged in, show login form
 		setIsCheckingAuth(false);
-	}, [isLoadingIsAuthEnabled]);
+	}, [hasValidToken, isAuthEnabled, isAuthEnabledError, isLoadingIsAuthEnabled, router]);
 
 	const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
 		setIsLoading(true);
@@ -73,7 +79,7 @@ export default function LoginView() {
 		try {
 			await login({ username, password }).unwrap();
 			// Cookie is set automatically by the server response — just navigate
-			router.push("/workspace");
+			router.replace("/workspace");
 		} catch (error) {
 			const message = getErrorMessage(error);
 			setErrorMessage(message);

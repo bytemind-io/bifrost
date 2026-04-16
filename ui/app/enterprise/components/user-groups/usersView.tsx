@@ -6,9 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alertDialog";
-import { ChevronLeft, ChevronRight, Edit, Plus, Search, Trash2, Users } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, Edit, Plus, Search, Trash2, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -16,6 +17,7 @@ interface User { id: string; name: string; email: string; role: string; team_id?
 interface UserFormData { email: string; name: string; password: string; role: string; }
 interface RoleOption { id: string; name: string; }
 const emptyForm: UserFormData = { email: "", name: "", password: "", role: "Viewer" };
+const formatUserId = (id: string) => id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id;
 
 export default function UsersView() {
 	const [users, setUsers] = useState<User[]>([]); const [total, setTotal] = useState(0);
@@ -26,6 +28,7 @@ export default function UsersView() {
 	const canCreate = useRbac(RbacResource.Users, RbacOperation.Create);
 	const canUpdate = useRbac(RbacResource.Users, RbacOperation.Update);
 	const canDelete = useRbac(RbacResource.Users, RbacOperation.Delete);
+	const { copy: copyUserId } = useCopyToClipboard({ successMessage: "User ID copied" });
 	const PAGE_SIZE = 25;
 
 	const fetchUsers = useCallback(async () => {
@@ -89,16 +92,24 @@ export default function UsersView() {
 		<div className="flex items-center justify-between"><div><h2 className="text-lg font-semibold">Users</h2><p className="text-muted-foreground text-sm">Manage enterprise users with role-based access control.</p></div>
 		{canCreate && <Button onClick={() => { setEditingUser(null); setFormData(emptyForm); setError(""); setDialogOpen(true); }}><Plus className="h-4 w-4" /> Add User</Button>}</div>
 		<div className="flex items-center gap-3"><div className="relative max-w-sm flex-1"><Search className="text-muted-foreground absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" /><Input placeholder="Search by name or email..." value={search} onChange={(e) => { setSearch(e.target.value); setOffset(0); }} className="pl-9" /></div></div>
-		<div className="rounded-sm border overflow-hidden"><Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Email</TableHead><TableHead>Role</TableHead><TableHead>Status</TableHead><TableHead>Created</TableHead>{(canUpdate || canDelete) && <TableHead className="text-right"></TableHead>}</TableRow></TableHeader>
-			<TableBody>{users.length === 0 ? (<TableRow><TableCell colSpan={6} className="h-24 text-center"><span className="text-muted-foreground text-sm">No matching users found.</span></TableCell></TableRow>) : (
+		<div className="rounded-sm border overflow-hidden"><Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead>User ID</TableHead><TableHead>Email</TableHead><TableHead>Role</TableHead><TableHead>Status</TableHead><TableHead>Created</TableHead>{(canUpdate || canDelete) && <TableHead className="text-right"></TableHead>}</TableRow></TableHeader>
+			<TableBody>{users.length === 0 ? (<TableRow><TableCell colSpan={(canUpdate || canDelete) ? 7 : 6} className="h-24 text-center"><span className="text-muted-foreground text-sm">No matching users found.</span></TableCell></TableRow>) : (
 				users.map((user) => (<TableRow key={user.id} className="group transition-colors">
-					<TableCell className="font-medium">{user.name}</TableCell><TableCell>{user.email}</TableCell>
+					<TableCell className="font-medium">{user.name}</TableCell>
+					<TableCell>
+						<div className="flex items-center gap-1">
+							<code className="text-muted-foreground font-mono text-xs" title={user.id}>{formatUserId(user.id)}</code>
+							<Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => copyUserId(user.id)} aria-label={`Copy user ID for ${user.email}`}>
+								<Copy className="h-3 w-3" />
+							</Button>
+						</div>
+					</TableCell><TableCell>{user.email}</TableCell>
 					<TableCell><Badge variant="secondary">{user.role}</Badge></TableCell>
 					<TableCell><Badge variant={user.is_active ? "outline" : "secondary"}>{user.is_active ? "Active" : "Inactive"}</Badge></TableCell>
 					<TableCell className="text-muted-foreground text-sm">{new Date(user.created_at).toLocaleDateString()}</TableCell>
 					{(canUpdate || canDelete) && (<TableCell className="text-right"><div className="flex items-center justify-end gap-1">
 						{canUpdate && <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditingUser(user); setFormData({ email: user.email, name: user.name, password: "", role: user.role }); setError(""); setDialogOpen(true); }}><Edit className="h-4 w-4" /></Button>}
-						{canDelete && <AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8"><Trash2 className="h-4 w-4" /></Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete User</AlertDialogTitle><AlertDialogDescription>Are you sure you want to delete &quot;{user.name}&quot;?</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => handleDelete(user)}>Delete</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
+						{canDelete && <AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"><Trash2 className="h-4 w-4" /></Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete User</AlertDialogTitle><AlertDialogDescription>Are you sure you want to delete &quot;{user.name}&quot;?</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => handleDelete(user)}>Delete</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
 					</div></TableCell>)}
 				</TableRow>))
 			)}</TableBody></Table></div>

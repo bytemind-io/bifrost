@@ -22,10 +22,10 @@ import { resetDurationOptions, supportsCalendarAlignment } from "@/lib/constants
 import { getErrorMessage, useCreateTeamMutation, useUpdateTeamMutation } from "@/lib/store";
 import { CreateTeamRequest, Customer, Team, UpdateTeamRequest } from "@/lib/types/governance";
 import { formatCurrency } from "@/lib/utils/governance";
+import { isShallowEqual } from "@/lib/utils/isShallowEqual";
 import { Validator } from "@/lib/utils/validation";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { formatDistanceToNow } from "date-fns";
-import isEqual from "lodash.isequal";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -110,7 +110,7 @@ export default function TeamDialog({ team, customers, onSave, onCancel }: TeamDi
 		};
 		setFormData((prev) => ({
 			...prev,
-			isDirty: !isEqual(initialState, currentData),
+			isDirty: !isShallowEqual(initialState, currentData),
 		}));
 	}, [
 		formData.name,

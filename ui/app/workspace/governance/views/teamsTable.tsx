@@ -21,9 +21,10 @@ import { getErrorMessage, useDeleteTeamMutation } from "@/lib/store";
 import { Customer, Team, VirtualKey } from "@/lib/types/governance";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/utils/governance";
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { Input } from "@/components/ui/input";
-import { ChevronLeft, ChevronRight, Edit, Plus, Search, Trash2, Users } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, Edit, Plus, Search, Trash2, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import TeamDialog from "./teamDialog";
@@ -39,13 +40,18 @@ interface TeamMember {
 	is_active: boolean;
 }
 
+const formatUserId = (id: string) => id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id;
+
 function TeamMembersDialog({ teamId, teamName, open, onOpenChange }: { teamId: string; teamName: string; open: boolean; onOpenChange: (open: boolean) => void }) {
 	const [members, setMembers] = useState<TeamMember[]>([]);
+	const [allUsers, setAllUsers] = useState<TeamMember[]>([]);
 	const [isLoading, setIsLoading] = useState(true);
 	const [addDialogOpen, setAddDialogOpen] = useState(false);
-	const [userId, setUserId] = useState("");
+	const [selectedUserId, setSelectedUserId] = useState("");
+	const [userSearch, setUserSearch] = useState("");
 	const [isSaving, setIsSaving] = useState(false);
 	const hasUpdateAccess = useRbac(RbacResource.Teams, RbacOperation.Update);
+	const { copy: copyUserId } = useCopyToClipboard({ successMessage: "User ID copied" });
 
 	const fetchMembers = useCallback(async () => {
 		if (!open) return;
@@ -58,16 +64,38 @@ function TeamMembersDialog({ teamId, teamName, open, onOpenChange }: { teamId: s
 
 	useEffect(() => { fetchMembers(); }, [fetchMembers]);
 
+	const fetchUsers = useCallback(async () => {
+		try {
+			const res = await fetch("/api/enterprise/users?limit=200", { credentials: "include" });
+			if (res.ok) {
+				const data = await res.json();
+				const users = data.data || data.users || data || [];
+				setAllUsers(Array.isArray(users) ? users : []);
+			}
+		} catch { /* ignore */ }
+	}, []);
+
+	useEffect(() => { if (addDialogOpen) fetchUsers(); }, [addDialogOpen, fetchUsers]);
+
+	const memberIds = new Set(members.map((m) => m.id));
+	const availableUsers = allUsers
+		.filter((u) => !memberIds.has(u.id) && u.is_active)
+		.filter((u) => {
+			if (!userSearch.trim()) return true;
+			const q = userSearch.toLowerCase();
+			return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+		});
+
 	const handleAssign = async () => {
-		if (!userId.trim()) return;
+		if (!selectedUserId) return;
 		setIsSaving(true);
 		try {
 			const res = await fetch(`/api/enterprise/teams/${teamId}/members`, {
 				method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
-				body: JSON.stringify({ user_id: userId }),
+				body: JSON.stringify({ user_id: selectedUserId }),
 			});
 			if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error?.message || d.message || "Failed"); }
-			toast.success("Member added"); setAddDialogOpen(false); setUserId(""); fetchMembers();
+			toast.success("Member added"); setAddDialogOpen(false); setSelectedUserId(""); setUserSearch(""); fetchMembers();
 		} catch (err: any) { toast.error(err.message); } finally { setIsSaving(false); }
 	};
 
@@ -92,16 +120,25 @@ function TeamMembersDialog({ teamId, teamName, open, onOpenChange }: { teamId: s
 						: members.length === 0 ? <p className="text-muted-foreground text-sm text-center py-4">No members in this team</p>
 						: members.map((m) => (
 							<div key={m.id} className="flex items-center justify-between rounded-sm border px-3 py-2">
-								<div><p className="text-sm font-medium">{m.name}</p><p className="text-muted-foreground text-xs">{m.email}</p></div>
+								<div>
+									<p className="text-sm font-medium">{m.name}</p>
+									<p className="text-muted-foreground text-xs">{m.email}</p>
+									<div className="mt-1 flex items-center gap-1">
+										<code className="text-muted-foreground font-mono text-[11px]" title={m.id}>{formatUserId(m.id)}</code>
+										<Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => copyUserId(m.id)} aria-label={`Copy user ID for ${m.email}`}>
+											<Copy className="h-3 w-3" />
+										</Button>
+									</div>
+								</div>
 								<div className="flex items-center gap-2">
 									<Badge variant="outline" className="text-xs">{m.role}</Badge>
-									{hasUpdateAccess && <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleRemove(m)}><Trash2 className="h-3 w-3" /></Button>}
+									{hasUpdateAccess && <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => handleRemove(m)}><Trash2 className="h-3 w-3" /></Button>}
 								</div>
 							</div>
 						))}
 					</div>
 					<DialogFooter>
-						{hasUpdateAccess && <Button size="sm" variant="outline" onClick={() => { setUserId(""); setAddDialogOpen(true); }}><Plus className="mr-1 h-3 w-3" /> Add Member</Button>}
+						{hasUpdateAccess && <Button size="sm" variant="outline" onClick={() => { setSelectedUserId(""); setUserSearch(""); setAddDialogOpen(true); }}><Plus className="mr-1 h-3 w-3" /> Add Member</Button>}
 						<Button size="sm" onClick={() => onOpenChange(false)}>Close</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -109,9 +146,45 @@ function TeamMembersDialog({ teamId, teamName, open, onOpenChange }: { teamId: s
 
 			<Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
 				<DialogContent>
-					<DialogHeader><DialogTitle>Add Member</DialogTitle><DialogDescription>Enter the user ID to add to this team.</DialogDescription></DialogHeader>
-					<div className="space-y-2 py-2"><Label>User ID</Label><Input value={userId} onChange={(e) => setUserId(e.target.value)} placeholder="Enter user ID" /></div>
-					<DialogFooter><Button variant="outline" onClick={() => setAddDialogOpen(false)}>Cancel</Button><Button onClick={handleAssign} disabled={isSaving}>{isSaving ? "Adding..." : "Add"}</Button></DialogFooter>
+					<DialogHeader><DialogTitle>Add Member</DialogTitle><DialogDescription>Select a user to add to this team.</DialogDescription></DialogHeader>
+					<div className="space-y-3 py-2">
+						<Input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Search by name or email..." />
+						<div className="max-h-[240px] overflow-y-auto space-y-1 rounded-sm border p-1">
+							{availableUsers.length === 0 ? (
+								<p className="text-muted-foreground text-sm text-center py-4">{allUsers.length === 0 ? "Loading users..." : "No available users"}</p>
+							) : availableUsers.map((u) => (
+								<button
+									key={u.id}
+									type="button"
+									className={`flex w-full items-center justify-between rounded-sm px-3 py-2 text-left text-sm transition-colors hover:bg-accent ${selectedUserId === u.id ? "bg-accent ring-1 ring-primary" : ""}`}
+									onClick={() => setSelectedUserId(u.id)}
+								>
+									<div>
+										<p className="font-medium">{u.name}</p>
+										<p className="text-muted-foreground text-xs">{u.email}</p>
+										<div className="mt-1 flex items-center gap-1">
+											<code className="text-muted-foreground font-mono text-[11px]" title={u.id}>{formatUserId(u.id)}</code>
+											<Button
+												type="button"
+												variant="ghost"
+												size="icon"
+												className="h-5 w-5"
+												onClick={(e) => {
+													e.stopPropagation();
+													copyUserId(u.id);
+												}}
+												aria-label={`Copy user ID for ${u.email}`}
+											>
+												<Copy className="h-3 w-3" />
+											</Button>
+										</div>
+									</div>
+									<Badge variant="outline" className="text-xs">{u.role}</Badge>
+								</button>
+							))}
+						</div>
+					</div>
+					<DialogFooter><Button variant="outline" onClick={() => setAddDialogOpen(false)}>Cancel</Button><Button onClick={handleAssign} disabled={isSaving || !selectedUserId}>{isSaving ? "Adding..." : "Add"}</Button></DialogFooter>
 				</DialogContent>
 			</Dialog>
 		</>
@@ -453,7 +526,7 @@ export default function TeamsTable({ teams, totalCount, customers, virtualKeys, 
 															<Button
 																variant="ghost"
 																size="icon"
-																className="h-8 w-8"
+																className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
 																disabled={!hasDeleteAccess}
 																aria-label={`Delete team ${team.name}`}
 																data-testid={`team-delete-btn-${team.name}`}

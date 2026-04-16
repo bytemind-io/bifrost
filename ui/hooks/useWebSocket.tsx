@@ -22,6 +22,7 @@ interface WebSocketProviderProps {
 
 // Global reference to maintain state across component remounts
 let globalWsRef: WebSocket | null = null;
+let globalIsConnecting = false;
 const messageHandlers = new Map<string, Set<MessageHandler>>();
 
 export function WebSocketProvider({ children, path = "/ws" }: WebSocketProviderProps) {
@@ -61,10 +62,18 @@ export function WebSocketProvider({ children, path = "/ws" }: WebSocketProviderP
 
 	useEffect(() => {
 		const connect = async () => {
-			if (wsRef.current?.readyState === WebSocket.OPEN) {
+			if (globalIsConnecting) {
 				return;
 			}
 
+			if (
+				wsRef.current?.readyState === WebSocket.OPEN ||
+				wsRef.current?.readyState === WebSocket.CONNECTING
+			) {
+				return;
+			}
+
+			globalIsConnecting = true;
 			const wsUrl = getWebSocketUrl(path);
 			// Obtain a short-lived, single-use ticket for WS auth instead of putting the session token in the URL.
 			let wsUrlWithAuth = wsUrl;
@@ -89,6 +98,7 @@ export function WebSocketProvider({ children, path = "/ws" }: WebSocketProviderP
 			globalWsRef = ws;
 
 			ws.onopen = () => {
+				globalIsConnecting = false;
 				setIsConnected(true);
 				retryCountRef.current = 0; // Reset retry count on successful connection
 
@@ -135,7 +145,14 @@ export function WebSocketProvider({ children, path = "/ws" }: WebSocketProviderP
 			};
 
 			ws.onclose = () => {
+				globalIsConnecting = false;
 				setIsConnected(false);
+				if (wsRef.current === ws) {
+					wsRef.current = null;
+				}
+				if (globalWsRef === ws) {
+					globalWsRef = null;
+				}
 
 				// Clear ping timer
 				if (pingTimerRef.current) {
@@ -151,6 +168,7 @@ export function WebSocketProvider({ children, path = "/ws" }: WebSocketProviderP
 			};
 
 			ws.onerror = (error) => {
+				globalIsConnecting = false;
 				setIsConnected(false);
 				ws.close();
 			};

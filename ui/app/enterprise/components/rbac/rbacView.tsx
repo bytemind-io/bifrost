@@ -9,14 +9,69 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdownMenu";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alertDialog";
 import { MoreHorizontal, Plus, Shield } from "lucide-react";
+import { useRbacContext } from "@enterprise/lib";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 interface Role { id: string; name: string; description: string; is_system: boolean; permission_count: number; }
 interface Permission { id: string; role_id: string; resource: string; operation: string; }
-const ALL_RESOURCES = ["Logs","ModelProvider","Observability","Plugins","VirtualKeys","UserProvisioning","Users","AuditLogs","GuardrailsConfig","GuardrailRules","Cluster","Settings","MCPGateway","AdaptiveRouter"];
+const ALL_RESOURCES = [
+	"Logs",
+	"Dashboard",
+	"Observability",
+	"ModelProvider",
+	"Plugins",
+	"VirtualKeys",
+	"Customers",
+	"Teams",
+	"Governance",
+	"Users",
+	"RBAC",
+	"UserProvisioning",
+	"AuditLogs",
+	"GuardrailsConfig",
+	"GuardrailsProviders",
+	"GuardrailRules",
+	"PIIRedactor",
+	"Cluster",
+	"Settings",
+	"APIKeys",
+	"Invitations",
+	"MCPGateway",
+	"AdaptiveRouter",
+	"RoutingRules",
+	"PromptRepository",
+	"PromptDeploymentStrategy",
+];
 const ALL_OPERATIONS = ["View","Create","Update","Delete"];
-const RESOURCE_LABELS: Record<string,string> = { Logs:"Logs",ModelProvider:"Model Providers",Observability:"Observability",Plugins:"Plugins",VirtualKeys:"Virtual Keys",UserProvisioning:"User Provisioning",Users:"Users",AuditLogs:"Audit Logs",GuardrailsConfig:"Guardrails Config",GuardrailRules:"Guardrail Rules",Cluster:"Cluster",Settings:"Settings",MCPGateway:"MCP Gateway",AdaptiveRouter:"Adaptive Router" };
+const RESOURCE_LABELS: Record<string,string> = {
+	Logs:"Logs",
+	Dashboard:"Dashboard",
+	Observability:"Observability",
+	ModelProvider:"Model Providers",
+	Plugins:"Plugins",
+	VirtualKeys:"Virtual Keys",
+	Customers:"Customers",
+	Teams:"Teams",
+	Governance:"Budgets & Limits",
+	Users:"Users",
+	RBAC:"Roles & Permissions",
+	UserProvisioning:"User Provisioning",
+	AuditLogs:"Audit Logs",
+	GuardrailsConfig:"Guardrails Config",
+	GuardrailsProviders:"Guardrails Providers",
+	GuardrailRules:"Guardrail Rules",
+	PIIRedactor:"PII Redactor",
+	Cluster:"Cluster",
+	Settings:"Settings",
+	APIKeys:"API Keys",
+	Invitations:"Invitations",
+	MCPGateway:"MCP Gateway",
+	AdaptiveRouter:"Adaptive Routing",
+	RoutingRules:"Routing Rules",
+	PromptRepository:"Prompt Repository",
+	PromptDeploymentStrategy:"Prompt Deployments",
+};
 
 export default function RBACView() {
 	const [roles, setRoles] = useState<Role[]>([]); const [isLoading, setIsLoading] = useState(true);
@@ -24,6 +79,7 @@ export default function RBACView() {
 	const [permRole, setPermRole] = useState<Role | null>(null); const [permOpen, setPermOpen] = useState(false);
 	const [permissions, setPermissions] = useState<Record<string, Record<string, boolean>>>({}); const [selectedResource, setSelectedResource] = useState(ALL_RESOURCES[0]);
 	const [deleteRole, setDeleteRoleState] = useState<Role | null>(null);
+	const { refetch: refetchGlobalPermissions } = useRbacContext();
 
 	const fetchRoles = useCallback(async () => {
 		setIsLoading(true);
@@ -42,7 +98,7 @@ export default function RBACView() {
 		if (!deleteRole) return;
 		try { const res = await fetch(`/api/roles/${deleteRole.id}`, { method: "DELETE", credentials: "include" });
 			if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error?.message || "Failed"); }
-			toast.success("Role deleted"); setDeleteRoleState(null); fetchRoles();
+			toast.success("Role deleted"); setDeleteRoleState(null); fetchRoles(); refetchGlobalPermissions();
 		} catch (err: any) { toast.error(err.message); }
 	};
 	const openManagePermissions = async (role: Role) => {
@@ -59,7 +115,7 @@ export default function RBACView() {
 		try { const permList: { resource: string; operation: string }[] = [];
 			for (const [resource, ops] of Object.entries(permissions)) { for (const [op, enabled] of Object.entries(ops)) { if (enabled) permList.push({ resource, operation: op }); } }
 			const res = await fetch(`/api/roles/${permRole.id}/permissions`, { method: "PUT", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(permList) });
-			if (!res.ok) throw new Error("Failed"); setPermOpen(false); toast.success("Permissions updated"); fetchRoles();
+			if (!res.ok) throw new Error("Failed"); setPermOpen(false); toast.success("Permissions updated"); fetchRoles(); refetchGlobalPermissions();
 		} catch (err: any) { toast.error(err.message); } finally { setIsSaving(false); }
 	};
 	const togglePerm = (resource: string, operation: string) => { setPermissions((prev) => ({ ...prev, [resource]: { ...prev[resource], [operation]: !prev[resource]?.[operation] } })); };
@@ -76,8 +132,8 @@ export default function RBACView() {
 					<TableCell className="text-center"><Badge variant="secondary">{role.permission_count}</Badge></TableCell>
 					<TableCell className="text-center"><Badge variant={role.is_system ? "outline" : "secondary"}>{role.is_system ? "System" : "Custom"}</Badge></TableCell>
 					<TableCell><DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
-						<DropdownMenuContent align="end"><DropdownMenuItem onClick={() => openManagePermissions(role)}>Manage Permissions</DropdownMenuItem>
-						{!role.is_system && <DropdownMenuItem onClick={() => setDeleteRoleState(role)}>Delete Role</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu></TableCell>
+						<DropdownMenuContent align="end"><DropdownMenuItem onClick={() => openManagePermissions(role)}>{role.is_system ? "View Permissions" : "Manage Permissions"}</DropdownMenuItem>
+						{!role.is_system && <DropdownMenuItem variant="destructive" onClick={() => setDeleteRoleState(role)}>Delete Role</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu></TableCell>
 				</TableRow>)))}</TableBody></Table></div>
 
 		<Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent><DialogHeader><DialogTitle>Create Role</DialogTitle><DialogDescription>Create a custom role.</DialogDescription></DialogHeader>
@@ -85,13 +141,13 @@ export default function RBACView() {
 			<div className="space-y-2"><Label>Description</Label><Input value={newDesc} onChange={(e) => setNewDesc(e.target.value)} placeholder="Purpose" /></div></div>
 			<DialogFooter><Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button><Button onClick={handleCreateRole} disabled={isSaving || !newName.trim()}>{isSaving ? "Creating..." : "Create Role"}</Button></DialogFooter></DialogContent></Dialog>
 
-		<Dialog open={permOpen} onOpenChange={setPermOpen}><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>Manage Permissions — {permRole?.name}</DialogTitle><DialogDescription>Toggle permissions for each resource.</DialogDescription></DialogHeader>
+		<Dialog open={permOpen} onOpenChange={setPermOpen}><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>{permRole?.is_system ? "View" : "Manage"} Permissions — {permRole?.name}</DialogTitle><DialogDescription>{permRole?.is_system ? "System role permissions are managed by the platform and cannot be modified." : "Toggle permissions for each resource."}</DialogDescription></DialogHeader>
 			<div className="flex gap-0 border rounded-sm min-h-[350px]">
 				<div className="w-1/2 border-r overflow-y-auto">{ALL_RESOURCES.map((resource) => (<button key={resource} type="button" className={`flex w-full items-center justify-between px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent ${selectedResource === resource ? "bg-accent" : ""}`} onClick={() => setSelectedResource(resource)}><span>{RESOURCE_LABELS[resource] || resource}</span><span className="text-muted-foreground text-xs">{getResCount(resource)}</span></button>))}</div>
 				<div className="w-1/2 p-4 space-y-4"><h4 className="text-sm font-medium">{RESOURCE_LABELS[selectedResource] || selectedResource}</h4>
-					{ALL_OPERATIONS.map((op) => (<div key={op} className="flex items-center justify-between"><div><p className="text-sm font-medium">{op}</p><p className="text-muted-foreground text-xs">{op === "View" && "Read-only access"}{op === "Create" && "Create new instances"}{op === "Update" && "Modify existing"}{op === "Delete" && "Remove resources"}</p></div><Switch checked={permissions[selectedResource]?.[op] || false} onCheckedChange={() => togglePerm(selectedResource, op)} /></div>))}</div>
+					{ALL_OPERATIONS.map((op) => (<div key={op} className="flex items-center justify-between"><div><p className="text-sm font-medium">{op}</p><p className="text-muted-foreground text-xs">{op === "View" && "Read-only access"}{op === "Create" && "Create new instances"}{op === "Update" && "Modify existing"}{op === "Delete" && "Remove resources"}</p></div><Switch checked={permissions[selectedResource]?.[op] || false} disabled={permRole?.is_system} onCheckedChange={() => togglePerm(selectedResource, op)} /></div>))}</div>
 			</div>
-			<DialogFooter className="flex items-center justify-between"><span className="text-muted-foreground text-sm">{getTotalCount()} of {ALL_RESOURCES.length * ALL_OPERATIONS.length} permissions</span><div className="flex gap-2"><Button variant="outline" onClick={() => setPermOpen(false)}>Cancel</Button><Button onClick={handleSavePermissions} disabled={isSaving}>{isSaving ? "Saving..." : "Save Permissions"}</Button></div></DialogFooter></DialogContent></Dialog>
+			<DialogFooter className="flex items-center justify-between"><span className="text-muted-foreground text-sm">{getTotalCount()} of {ALL_RESOURCES.length * ALL_OPERATIONS.length} permissions</span><div className="flex gap-2"><Button variant="outline" onClick={() => setPermOpen(false)}>{permRole?.is_system ? "Close" : "Cancel"}</Button>{!permRole?.is_system && <Button onClick={handleSavePermissions} disabled={isSaving}>{isSaving ? "Saving..." : "Save Permissions"}</Button>}</div></DialogFooter></DialogContent></Dialog>
 
 		<AlertDialog open={!!deleteRole} onOpenChange={(open) => { if (!open) setDeleteRoleState(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete Role</AlertDialogTitle><AlertDialogDescription>Delete &quot;{deleteRole?.name}&quot;? Users with this role will lose permissions.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={handleDeleteRole}>Delete</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
 	</div>);

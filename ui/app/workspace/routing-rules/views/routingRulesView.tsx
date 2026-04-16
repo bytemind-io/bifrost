@@ -5,7 +5,7 @@
 
 "use client";
 
-import { RbacOperation, RbacResource, useRbac } from "@/app/_fallbacks/enterprise/lib/contexts/rbacContext";
+import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { Button } from "@/components/ui/button";
 import { useDebouncedValue } from "@/hooks/useDebounce";
 import { useGetRoutingRulesQuery } from "@/lib/store/apis/routingRulesApi";
