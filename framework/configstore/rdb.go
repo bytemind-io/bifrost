@@ -1856,6 +1856,8 @@ func (s *RDBConfigStore) DeleteVirtualKey(ctx context.Context, id string) error 
 			"encryption_status": tables.EncryptionStatusPlainText,
 			"budget_id":         nil,
 			"rate_limit_id":     nil,
+			"team_id":           nil,
+			"customer_id":       nil,
 		}
 		// NOTE: must route through a zero-value model + Where, not Model(&virtualKey).
 		// virtualKey was loaded with Preload("ProviderConfigs"), and GORM auto-saves
@@ -2386,13 +2388,22 @@ func (s *RDBConfigStore) DeleteCustomer(ctx context.Context, id string) error {
 			}
 			return err
 		}
-		// Set customer_id to null for all virtual keys associated with the customer
-		if err := tx.WithContext(ctx).Model(&tables.TableVirtualKey{}).Where("customer_id = ?", id).Update("customer_id", nil).Error; err != nil {
+		// Refuse if the customer still has virtual keys or teams attached. Detaching
+		// silently (setting customer_id to NULL) leaves VKs/teams ownerless and makes
+		// tenant-scoped billing/audit impossible to reconcile.
+		var vkCount, teamCount int64
+		if err := tx.WithContext(ctx).Model(&tables.TableVirtualKey{}).Where("customer_id = ?", id).Count(&vkCount).Error; err != nil {
 			return err
 		}
-		// Set customer_id to null for all teams associated with the customer
-		if err := tx.WithContext(ctx).Model(&tables.TableTeam{}).Where("customer_id = ?", id).Update("customer_id", nil).Error; err != nil {
+		if err := tx.WithContext(ctx).Model(&tables.TableTeam{}).Where("customer_id = ?", id).Count(&teamCount).Error; err != nil {
 			return err
+		}
+		if vkCount > 0 || teamCount > 0 {
+			return &ErrHasDependents{
+				Resource:    "customer",
+				VirtualKeys: int(vkCount),
+				Teams:       int(teamCount),
+			}
 		}
 		// Store the budget and rate limit IDs before deleting the customer
 		budgetID := customer.BudgetID

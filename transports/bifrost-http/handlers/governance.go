@@ -2440,6 +2440,12 @@ func (h *GovernanceHandler) deleteCustomer(ctx *fasthttp.RequestCtx) {
 			SendError(ctx, 404, "Customer not found")
 			return
 		}
+		var depErr *configstore.ErrHasDependents
+		if errors.As(err, &depErr) {
+			SendError(ctx, fasthttp.StatusConflict, depErr.Error())
+			return
+		}
+		logger.Error("failed to delete customer %s: %v", customerID, err)
 		SendError(ctx, 500, "Failed to delete customer")
 		return
 	}
