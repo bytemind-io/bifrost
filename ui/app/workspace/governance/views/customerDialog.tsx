@@ -1,21 +1,21 @@
-"use client"
+"use client";
 
-import FormFooter from "@/components/formFooter"
-import { Badge } from "@/components/ui/badge"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import NumberAndSelect from "@/components/ui/numberAndSelect"
-import { resetDurationOptions } from "@/lib/constants/governance"
-import { getErrorMessage, useCreateCustomerMutation, useUpdateCustomerMutation } from "@/lib/store"
-import { CreateCustomerRequest, Customer, UpdateCustomerRequest } from "@/lib/types/governance"
-import { formatCurrency } from "@/lib/utils/governance"
-import { isShallowEqual } from "@/lib/utils/isShallowEqual"
-import { Validator } from "@/lib/utils/validation"
-import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib"
-import { formatDistanceToNow } from "date-fns"
-import { useEffect, useMemo, useState } from "react"
-import { toast } from "sonner"
+import FormFooter from "@/components/formFooter";
+import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import NumberAndSelect from "@/components/ui/numberAndSelect";
+import { resetDurationOptions } from "@/lib/constants/governance";
+import { getErrorMessage, useCreateCustomerMutation, useUpdateCustomerMutation } from "@/lib/store";
+import { CreateCustomerRequest, Customer, UpdateCustomerRequest } from "@/lib/types/governance";
+import { formatCurrency } from "@/lib/utils/governance";
+import { isShallowEqual } from "@/lib/utils/isShallowEqual";
+import { Validator } from "@/lib/utils/validation";
+import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
+import { formatDistanceToNow } from "date-fns";
+import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 
 interface CustomerDialogProps {
 	customer?: Customer | null;
@@ -52,21 +52,21 @@ const createInitialState = (customer?: Customer | null): Omit<CustomerFormData, 
 };
 
 export default function CustomerDialog({ customer, onSave, onCancel }: CustomerDialogProps) {
-  const isEditing = !!customer
-  const [initialState] = useState<Omit<CustomerFormData, "isDirty">>(createInitialState(customer))
-  const [formData, setFormData] = useState<CustomerFormData>({
-    ...initialState,
-    isDirty: false,
-  })
+	const isEditing = !!customer;
+	const [initialState] = useState<Omit<CustomerFormData, "isDirty">>(createInitialState(customer));
+	const [formData, setFormData] = useState<CustomerFormData>({
+		...initialState,
+		isDirty: false,
+	});
 
-  const hasCreateAccess = useRbac(RbacResource.Customers, RbacOperation.Create)
-  const hasUpdateAccess = useRbac(RbacResource.Customers, RbacOperation.Update)
-  const hasPermission = isEditing ? hasUpdateAccess : hasCreateAccess
+	const hasCreateAccess = useRbac(RbacResource.Customers, RbacOperation.Create);
+	const hasUpdateAccess = useRbac(RbacResource.Customers, RbacOperation.Update);
+	const hasPermission = isEditing ? hasUpdateAccess : hasCreateAccess;
 
-  // RTK Query hooks
-  const [createCustomer, { isLoading: isCreating }] = useCreateCustomerMutation()
-  const [updateCustomer, { isLoading: isUpdating }] = useUpdateCustomerMutation()
-  const loading = isCreating || isUpdating
+	// RTK Query hooks
+	const [createCustomer, { isLoading: isCreating }] = useCreateCustomerMutation();
+	const [updateCustomer, { isLoading: isUpdating }] = useUpdateCustomerMutation();
+	const loading = isCreating || isUpdating;
 
 	// Track isDirty state
 	useEffect(() => {
@@ -83,7 +83,16 @@ export default function CustomerDialog({ customer, onSave, onCancel }: CustomerD
 			...prev,
 			isDirty: !isShallowEqual(initialState, currentData),
 		}));
-	}, [formData.name, formData.budgetMaxLimit, formData.budgetResetDuration, formData.tokenMaxLimit, formData.tokenResetDuration, formData.requestMaxLimit, formData.requestResetDuration, initialState]);
+	}, [
+		formData.name,
+		formData.budgetMaxLimit,
+		formData.budgetResetDuration,
+		formData.tokenMaxLimit,
+		formData.tokenResetDuration,
+		formData.requestMaxLimit,
+		formData.requestResetDuration,
+		initialState,
+	]);
 
 	// Parse string values to numbers for validation and submission
 	const budgetMaxLimitNum = formData.budgetMaxLimit ? parseFloat(formData.budgetMaxLimit) : undefined;
@@ -210,7 +219,7 @@ export default function CustomerDialog({ customer, onSave, onCancel }: CustomerD
 
 	return (
 		<Dialog open onOpenChange={onCancel}>
-			<DialogContent className="max-w-2xl" data-testid="customer-dialog-content">
+			<DialogContent className="max-h-[80vh] max-w-2xl overflow-y-scroll" data-testid="customer-dialog-content">
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">{isEditing ? "Edit Customer" : "Create Customer"}</DialogTitle>
 					<DialogDescription>
@@ -274,9 +283,9 @@ export default function CustomerDialog({ customer, onSave, onCancel }: CustomerD
 
 						{/* Current Usage Section (only shown when editing with existing limits) */}
 						{isEditing && (customer?.budget || customer?.rate_limit) && (
-							<div className="rounded-lg border bg-muted/50 p-4 space-y-4">
+							<div className="bg-muted/50 space-y-4 rounded-lg border p-4">
 								<p className="text-sm font-medium">Current Usage</p>
-								<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+								<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 									{customer?.budget && (
 										<div className="space-y-1">
 											<p className="text-muted-foreground text-xs">Budget</p>
@@ -301,10 +310,13 @@ export default function CustomerDialog({ customer, onSave, onCancel }: CustomerD
 											<p className="text-muted-foreground text-xs">Tokens</p>
 											<div className="flex items-center gap-2">
 												<span className="font-mono text-sm">
-													{customer.rate_limit.token_current_usage.toLocaleString()} / {customer.rate_limit.token_max_limit.toLocaleString()}
+													{customer.rate_limit.token_current_usage.toLocaleString()} /{" "}
+													{customer.rate_limit.token_max_limit.toLocaleString()}
 												</span>
 												<Badge
-													variant={customer.rate_limit.token_current_usage >= customer.rate_limit.token_max_limit ? "destructive" : "default"}
+													variant={
+														customer.rate_limit.token_current_usage >= customer.rate_limit.token_max_limit ? "destructive" : "default"
+													}
 													className="text-xs"
 												>
 													{Math.round((customer.rate_limit.token_current_usage / customer.rate_limit.token_max_limit) * 100)}%
@@ -320,10 +332,13 @@ export default function CustomerDialog({ customer, onSave, onCancel }: CustomerD
 											<p className="text-muted-foreground text-xs">Requests</p>
 											<div className="flex items-center gap-2">
 												<span className="font-mono text-sm">
-													{customer.rate_limit.request_current_usage.toLocaleString()} / {customer.rate_limit.request_max_limit.toLocaleString()}
+													{customer.rate_limit.request_current_usage.toLocaleString()} /{" "}
+													{customer.rate_limit.request_max_limit.toLocaleString()}
 												</span>
 												<Badge
-													variant={customer.rate_limit.request_current_usage >= customer.rate_limit.request_max_limit ? "destructive" : "default"}
+													variant={
+														customer.rate_limit.request_current_usage >= customer.rate_limit.request_max_limit ? "destructive" : "default"
+													}
 													className="text-xs"
 												>
 													{Math.round((customer.rate_limit.request_current_usage / customer.rate_limit.request_max_limit) * 100)}%
@@ -339,9 +354,9 @@ export default function CustomerDialog({ customer, onSave, onCancel }: CustomerD
 						)}
 
 						{isEditing && customer?.historical_usage && (
-							<div className="rounded-lg border bg-muted/50 p-4 space-y-4">
+							<div className="bg-muted/50 space-y-4 rounded-lg border p-4">
 								<p className="text-sm font-medium">Historical Usage</p>
-								<div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+								<div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
 									<div className="space-y-1">
 										<p className="text-muted-foreground text-xs">Total Cost</p>
 										<p className="font-mono text-sm">{formatCurrency(customer.historical_usage.total_cost)}</p>
@@ -359,7 +374,14 @@ export default function CustomerDialog({ customer, onSave, onCancel }: CustomerD
 						)}
 					</div>
 
-					<FormFooter validator={validator} label="Customer" onCancel={onCancel} isLoading={loading} isEditing={isEditing} hasPermission={hasPermission} />
+					<FormFooter
+						validator={validator}
+						label="Customer"
+						onCancel={onCancel}
+						isLoading={loading}
+						isEditing={isEditing}
+						hasPermission={hasPermission}
+					/>
 				</form>
 			</DialogContent>
 		</Dialog>

@@ -254,7 +254,7 @@ export default function TeamDialog({ team, customers, onSave, onCancel }: TeamDi
 
 	return (
 		<Dialog open onOpenChange={onCancel}>
-			<DialogContent className="max-w-2xl" data-testid="team-dialog-content">
+			<DialogContent className="max-h-[80vh] max-w-2xl overflow-y-scroll" data-testid="team-dialog-content">
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">{isEditing ? "Edit Team" : "Create Team"}</DialogTitle>
 					<DialogDescription>
@@ -360,8 +360,8 @@ export default function TeamDialog({ team, customers, onSave, onCancel }: TeamDi
 													: formData.budgetResetDuration === "1Y"
 														? "year"
 														: "period"}
-										. The usage reset to $0.00 cannot be undone, but calendar alignment can be turned off later.
-										This will take effect when you save.
+										. The usage reset to $0.00 cannot be undone, but calendar alignment can be turned off later. This will take effect when
+										you save.
 									</AlertDialogDescription>
 								</AlertDialogHeader>
 								<AlertDialogFooter>

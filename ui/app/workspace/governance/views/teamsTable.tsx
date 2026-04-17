@@ -30,7 +30,6 @@ import { toast } from "sonner";
 import TeamDialog from "./teamDialog";
 import { TeamsEmptyState } from "./teamsEmptyState";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
 
 interface TeamMember {
 	id: string;
@@ -40,9 +39,19 @@ interface TeamMember {
 	is_active: boolean;
 }
 
-const formatUserId = (id: string) => id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id;
+const formatUserId = (id: string) => (id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id);
 
-function TeamMembersDialog({ teamId, teamName, open, onOpenChange }: { teamId: string; teamName: string; open: boolean; onOpenChange: (open: boolean) => void }) {
+function TeamMembersDialog({
+	teamId,
+	teamName,
+	open,
+	onOpenChange,
+}: {
+	teamId: string;
+	teamName: string;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+}) {
 	const [members, setMembers] = useState<TeamMember[]>([]);
 	const [allUsers, setAllUsers] = useState<TeamMember[]>([]);
 	const [isLoading, setIsLoading] = useState(true);
@@ -58,11 +67,20 @@ function TeamMembersDialog({ teamId, teamName, open, onOpenChange }: { teamId: s
 		setIsLoading(true);
 		try {
 			const res = await fetch(`/api/enterprise/teams/${teamId}/members`, { credentials: "include" });
-			if (res.ok) { const data = await res.json(); setMembers(data.data || []); }
-		} catch { /* ignore */ } finally { setIsLoading(false); }
+			if (res.ok) {
+				const data = await res.json();
+				setMembers(data.data || []);
+			}
+		} catch {
+			/* ignore */
+		} finally {
+			setIsLoading(false);
+		}
 	}, [teamId, open]);
 
-	useEffect(() => { fetchMembers(); }, [fetchMembers]);
+	useEffect(() => {
+		fetchMembers();
+	}, [fetchMembers]);
 
 	const fetchUsers = useCallback(async () => {
 		try {
@@ -72,10 +90,14 @@ function TeamMembersDialog({ teamId, teamName, open, onOpenChange }: { teamId: s
 				const users = data.data || data.users || data || [];
 				setAllUsers(Array.isArray(users) ? users : []);
 			}
-		} catch { /* ignore */ }
+		} catch {
+			/* ignore */
+		}
 	}, []);
 
-	useEffect(() => { if (addDialogOpen) fetchUsers(); }, [addDialogOpen, fetchUsers]);
+	useEffect(() => {
+		if (addDialogOpen) fetchUsers();
+	}, [addDialogOpen, fetchUsers]);
 
 	const memberIds = new Set(members.map((m) => m.id));
 	const availableUsers = allUsers
@@ -91,20 +113,38 @@ function TeamMembersDialog({ teamId, teamName, open, onOpenChange }: { teamId: s
 		setIsSaving(true);
 		try {
 			const res = await fetch(`/api/enterprise/teams/${teamId}/members`, {
-				method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				credentials: "include",
 				body: JSON.stringify({ user_id: selectedUserId }),
 			});
-			if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error?.message || d.message || "Failed"); }
-			toast.success("Member added"); setAddDialogOpen(false); setSelectedUserId(""); setUserSearch(""); fetchMembers();
-		} catch (err: any) { toast.error(err.message); } finally { setIsSaving(false); }
+			if (!res.ok) {
+				const d = await res.json().catch(() => ({}));
+				throw new Error(d.error?.message || d.message || "Failed");
+			}
+			toast.success("Member added");
+			setAddDialogOpen(false);
+			setSelectedUserId("");
+			setUserSearch("");
+			fetchMembers();
+		} catch (err: any) {
+			toast.error(err.message);
+		} finally {
+			setIsSaving(false);
+		}
 	};
 
 	const handleRemove = async (member: TeamMember) => {
 		if (!confirm(`Remove "${member.name}" from team?`)) return;
 		try {
 			const res = await fetch(`/api/enterprise/teams/${teamId}/members/${member.id}`, { method: "DELETE", credentials: "include" });
-			if (res.ok) { toast.success("Member removed"); fetchMembers(); }
-		} catch { toast.error("Failed to remove member"); }
+			if (res.ok) {
+				toast.success("Member removed");
+				fetchMembers();
+			}
+		} catch {
+			toast.error("Failed to remove member");
+		}
 	};
 
 	return (
@@ -116,75 +156,130 @@ function TeamMembersDialog({ teamId, teamName, open, onOpenChange }: { teamId: s
 						<DialogDescription>Manage users in this team.</DialogDescription>
 					</DialogHeader>
 					<div className="space-y-3 py-2">
-						{isLoading ? <p className="text-muted-foreground text-sm text-center py-4">Loading...</p>
-						: members.length === 0 ? <p className="text-muted-foreground text-sm text-center py-4">No members in this team</p>
-						: members.map((m) => (
-							<div key={m.id} className="flex items-center justify-between rounded-sm border px-3 py-2">
-								<div>
-									<p className="text-sm font-medium">{m.name}</p>
-									<p className="text-muted-foreground text-xs">{m.email}</p>
-									<div className="mt-1 flex items-center gap-1">
-										<code className="text-muted-foreground font-mono text-[11px]" title={m.id}>{formatUserId(m.id)}</code>
-										<Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => copyUserId(m.id)} aria-label={`Copy user ID for ${m.email}`}>
-											<Copy className="h-3 w-3" />
-										</Button>
-									</div>
-								</div>
-								<div className="flex items-center gap-2">
-									<Badge variant="outline" className="text-xs">{m.role}</Badge>
-									{hasUpdateAccess && <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => handleRemove(m)}><Trash2 className="h-3 w-3" /></Button>}
-								</div>
-							</div>
-						))}
-					</div>
-					<DialogFooter>
-						{hasUpdateAccess && <Button size="sm" variant="outline" onClick={() => { setSelectedUserId(""); setUserSearch(""); setAddDialogOpen(true); }}><Plus className="mr-1 h-3 w-3" /> Add Member</Button>}
-						<Button size="sm" onClick={() => onOpenChange(false)}>Close</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
-
-			<Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-				<DialogContent>
-					<DialogHeader><DialogTitle>Add Member</DialogTitle><DialogDescription>Select a user to add to this team.</DialogDescription></DialogHeader>
-					<div className="space-y-3 py-2">
-						<Input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Search by name or email..." />
-						<div className="max-h-[240px] overflow-y-auto space-y-1 rounded-sm border p-1">
-							{availableUsers.length === 0 ? (
-								<p className="text-muted-foreground text-sm text-center py-4">{allUsers.length === 0 ? "Loading users..." : "No available users"}</p>
-							) : availableUsers.map((u) => (
-								<button
-									key={u.id}
-									type="button"
-									className={`flex w-full items-center justify-between rounded-sm px-3 py-2 text-left text-sm transition-colors hover:bg-accent ${selectedUserId === u.id ? "bg-accent ring-1 ring-primary" : ""}`}
-									onClick={() => setSelectedUserId(u.id)}
-								>
+						{isLoading ? (
+							<p className="text-muted-foreground py-4 text-center text-sm">Loading...</p>
+						) : members.length === 0 ? (
+							<p className="text-muted-foreground py-4 text-center text-sm">No members in this team</p>
+						) : (
+							members.map((m) => (
+								<div key={m.id} className="flex items-center justify-between rounded-sm border px-3 py-2">
 									<div>
-										<p className="font-medium">{u.name}</p>
-										<p className="text-muted-foreground text-xs">{u.email}</p>
+										<p className="text-sm font-medium">{m.name}</p>
+										<p className="text-muted-foreground text-xs">{m.email}</p>
 										<div className="mt-1 flex items-center gap-1">
-											<code className="text-muted-foreground font-mono text-[11px]" title={u.id}>{formatUserId(u.id)}</code>
+											<code className="text-muted-foreground font-mono text-[11px]" title={m.id}>
+												{formatUserId(m.id)}
+											</code>
 											<Button
-												type="button"
 												variant="ghost"
 												size="icon"
 												className="h-5 w-5"
-												onClick={(e) => {
-													e.stopPropagation();
-													copyUserId(u.id);
-												}}
-												aria-label={`Copy user ID for ${u.email}`}
+												onClick={() => copyUserId(m.id)}
+												aria-label={`Copy user ID for ${m.email}`}
 											>
 												<Copy className="h-3 w-3" />
 											</Button>
 										</div>
 									</div>
-									<Badge variant="outline" className="text-xs">{u.role}</Badge>
-								</button>
-							))}
+									<div className="flex items-center gap-2">
+										<Badge variant="outline" className="text-xs">
+											{m.role}
+										</Badge>
+										{hasUpdateAccess && (
+											<Button
+												variant="ghost"
+												size="icon"
+												className="text-destructive hover:bg-destructive/10 hover:text-destructive h-7 w-7"
+												onClick={() => handleRemove(m)}
+											>
+												<Trash2 className="h-3 w-3" />
+											</Button>
+										)}
+									</div>
+								</div>
+							))
+						)}
+					</div>
+					<DialogFooter>
+						{hasUpdateAccess && (
+							<Button
+								size="sm"
+								variant="outline"
+								onClick={() => {
+									setSelectedUserId("");
+									setUserSearch("");
+									setAddDialogOpen(true);
+								}}
+							>
+								<Plus className="mr-1 h-3 w-3" /> Add Member
+							</Button>
+						)}
+						<Button size="sm" onClick={() => onOpenChange(false)}>
+							Close
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			<Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+				<DialogContent className="max-h-[80vh] overflow-y-scroll">
+					<DialogHeader>
+						<DialogTitle>Add Member</DialogTitle>
+						<DialogDescription>Select a user to add to this team.</DialogDescription>
+					</DialogHeader>
+					<div className="space-y-3 py-2">
+						<Input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Search by name or email..." />
+						<div className="max-h-[240px] space-y-1 overflow-y-auto rounded-sm border p-1">
+							{availableUsers.length === 0 ? (
+								<p className="text-muted-foreground py-4 text-center text-sm">
+									{allUsers.length === 0 ? "Loading users..." : "No available users"}
+								</p>
+							) : (
+								availableUsers.map((u) => (
+									<button
+										key={u.id}
+										type="button"
+										className={`hover:bg-accent flex w-full items-center justify-between rounded-sm px-3 py-2 text-left text-sm transition-colors ${selectedUserId === u.id ? "bg-accent ring-primary ring-1" : ""}`}
+										onClick={() => setSelectedUserId(u.id)}
+									>
+										<div>
+											<p className="font-medium">{u.name}</p>
+											<p className="text-muted-foreground text-xs">{u.email}</p>
+											<div className="mt-1 flex items-center gap-1">
+												<code className="text-muted-foreground font-mono text-[11px]" title={u.id}>
+													{formatUserId(u.id)}
+												</code>
+												<Button
+													type="button"
+													variant="ghost"
+													size="icon"
+													className="h-5 w-5"
+													onClick={(e) => {
+														e.stopPropagation();
+														copyUserId(u.id);
+													}}
+													aria-label={`Copy user ID for ${u.email}`}
+												>
+													<Copy className="h-3 w-3" />
+												</Button>
+											</div>
+										</div>
+										<Badge variant="outline" className="text-xs">
+											{u.role}
+										</Badge>
+									</button>
+								))
+							)}
 						</div>
 					</div>
-					<DialogFooter><Button variant="outline" onClick={() => setAddDialogOpen(false)}>Cancel</Button><Button onClick={handleAssign} disabled={isSaving || !selectedUserId}>{isSaving ? "Adding..." : "Add"}</Button></DialogFooter>
+					<DialogFooter>
+						<Button variant="outline" onClick={() => setAddDialogOpen(false)}>
+							Cancel
+						</Button>
+						<Button onClick={handleAssign} disabled={isSaving || !selectedUserId}>
+							{isSaving ? "Adding..." : "Add"}
+						</Button>
+					</DialogFooter>
 				</DialogContent>
 			</Dialog>
 		</>
@@ -209,7 +304,18 @@ interface TeamsTableProps {
 	onOffsetChange: (offset: number) => void;
 }
 
-export default function TeamsTable({ teams, totalCount, customers, virtualKeys, search, debouncedSearch, onSearchChange, offset, limit, onOffsetChange }: TeamsTableProps) {
+export default function TeamsTable({
+	teams,
+	totalCount,
+	customers,
+	virtualKeys,
+	search,
+	debouncedSearch,
+	onSearchChange,
+	offset,
+	limit,
+	onOffsetChange,
+}: TeamsTableProps) {
 	const [showTeamDialog, setShowTeamDialog] = useState(false);
 	const [editingTeam, setEditingTeam] = useState<Team | null>(null);
 	const [membersTeam, setMembersTeam] = useState<Team | null>(null);
@@ -291,7 +397,7 @@ export default function TeamsTable({ teams, totalCount, customers, virtualKeys, 
 
 					<div className="flex items-center gap-3">
 						<div className="relative max-w-sm flex-1">
-							<Search className="text-muted-foreground absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" />
+							<Search className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
 							<Input
 								aria-label="Search teams by name"
 								placeholder="Search by name..."
@@ -324,38 +430,38 @@ export default function TeamsTable({ teams, totalCount, customers, virtualKeys, 
 										</TableCell>
 									</TableRow>
 								) : (
-								teams.map((team) => {
-									const vks = getVirtualKeysForTeam(team.id);
-									const customerName = getCustomerName(team.customer_id);
+									teams.map((team) => {
+										const vks = getVirtualKeysForTeam(team.id);
+										const customerName = getCustomerName(team.customer_id);
 
-									// Budget calculations
-									const isBudgetExhausted =
-										team.budget?.max_limit && team.budget.max_limit > 0 && team.budget.current_usage >= team.budget.max_limit;
-									const budgetPercentage =
-										team.budget?.max_limit && team.budget.max_limit > 0
-											? Math.min((team.budget.current_usage / team.budget.max_limit) * 100, 100)
-											: 0;
+										// Budget calculations
+										const isBudgetExhausted =
+											team.budget?.max_limit && team.budget.max_limit > 0 && team.budget.current_usage >= team.budget.max_limit;
+										const budgetPercentage =
+											team.budget?.max_limit && team.budget.max_limit > 0
+												? Math.min((team.budget.current_usage / team.budget.max_limit) * 100, 100)
+												: 0;
 
-									// Rate limit calculations
-									const isTokenLimitExhausted =
-										team.rate_limit?.token_max_limit &&
-										team.rate_limit.token_max_limit > 0 &&
-										team.rate_limit.token_current_usage >= team.rate_limit.token_max_limit;
-									const isRequestLimitExhausted =
-										team.rate_limit?.request_max_limit &&
-										team.rate_limit.request_max_limit > 0 &&
-										team.rate_limit.request_current_usage >= team.rate_limit.request_max_limit;
-									const isRateLimitExhausted = isTokenLimitExhausted || isRequestLimitExhausted;
-									const tokenPercentage =
-										team.rate_limit?.token_max_limit && team.rate_limit.token_max_limit > 0
-											? Math.min((team.rate_limit.token_current_usage / team.rate_limit.token_max_limit) * 100, 100)
-											: 0;
-									const requestPercentage =
-										team.rate_limit?.request_max_limit && team.rate_limit.request_max_limit > 0
-											? Math.min((team.rate_limit.request_current_usage / team.rate_limit.request_max_limit) * 100, 100)
-											: 0;
+										// Rate limit calculations
+										const isTokenLimitExhausted =
+											team.rate_limit?.token_max_limit &&
+											team.rate_limit.token_max_limit > 0 &&
+											team.rate_limit.token_current_usage >= team.rate_limit.token_max_limit;
+										const isRequestLimitExhausted =
+											team.rate_limit?.request_max_limit &&
+											team.rate_limit.request_max_limit > 0 &&
+											team.rate_limit.request_current_usage >= team.rate_limit.request_max_limit;
+										const isRateLimitExhausted = isTokenLimitExhausted || isRequestLimitExhausted;
+										const tokenPercentage =
+											team.rate_limit?.token_max_limit && team.rate_limit.token_max_limit > 0
+												? Math.min((team.rate_limit.token_current_usage / team.rate_limit.token_max_limit) * 100, 100)
+												: 0;
+										const requestPercentage =
+											team.rate_limit?.request_max_limit && team.rate_limit.request_max_limit > 0
+												? Math.min((team.rate_limit.request_current_usage / team.rate_limit.request_max_limit) * 100, 100)
+												: 0;
 
-									const isExhausted = isBudgetExhausted || isRateLimitExhausted;
+										const isExhausted = isBudgetExhausted || isRateLimitExhausted;
 
 									return (
 										<TableRow key={team.id} data-testid={`team-row-${team.name}`} className={cn("group transition-colors", isExhausted && "bg-red-500/5 hover:bg-red-500/10")}>
@@ -619,7 +725,9 @@ export default function TeamsTable({ teams, totalCount, customers, virtualKeys, 
 						teamId={membersTeam.id}
 						teamName={membersTeam.name}
 						open={!!membersTeam}
-						onOpenChange={(open) => { if (!open) setMembersTeam(null); }}
+						onOpenChange={(open) => {
+							if (!open) setMembersTeam(null);
+						}}
 					/>
 				)}
 			</TooltipProvider>
