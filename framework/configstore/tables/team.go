@@ -36,6 +36,8 @@ type TableTeam struct {
 	// Every time we sync the config.json file, we will update the config hash
 	ConfigHash string `gorm:"type:varchar(255);null" json:"config_hash"`
 
+	HistoricalUsage *HistoricalUsage `gorm:"-" json:"historical_usage,omitempty"`
+
 	CreatedAt time.Time `gorm:"index;not null" json:"created_at"`
 	UpdatedAt time.Time `gorm:"index;not null" json:"updated_at"`
 }

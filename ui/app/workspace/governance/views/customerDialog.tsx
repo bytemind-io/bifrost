@@ -337,6 +337,26 @@ export default function CustomerDialog({ customer, onSave, onCancel }: CustomerD
 								</div>
 							</div>
 						)}
+
+						{isEditing && customer?.historical_usage && (
+							<div className="rounded-lg border bg-muted/50 p-4 space-y-4">
+								<p className="text-sm font-medium">Historical Usage</p>
+								<div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+									<div className="space-y-1">
+										<p className="text-muted-foreground text-xs">Total Cost</p>
+										<p className="font-mono text-sm">{formatCurrency(customer.historical_usage.total_cost)}</p>
+									</div>
+									<div className="space-y-1">
+										<p className="text-muted-foreground text-xs">Total Tokens</p>
+										<p className="font-mono text-sm">{customer.historical_usage.total_tokens.toLocaleString()}</p>
+									</div>
+									<div className="space-y-1">
+										<p className="text-muted-foreground text-xs">Total Requests</p>
+										<p className="font-mono text-sm">{customer.historical_usage.total_requests.toLocaleString()}</p>
+									</div>
+								</div>
+							</div>
+						)}
 					</div>
 
 					<FormFooter validator={validator} label="Customer" onCancel={onCancel} isLoading={loading} isEditing={isEditing} hasPermission={hasPermission} />

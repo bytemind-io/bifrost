@@ -2,6 +2,12 @@ package tables
 
 import "time"
 
+type HistoricalUsage struct {
+	TotalCost     float64 `gorm:"-" json:"total_cost"`
+	TotalTokens   int64   `gorm:"-" json:"total_tokens"`
+	TotalRequests int64   `gorm:"-" json:"total_requests"`
+}
+
 // TableCustomer represents a customer entity with budget and rate limit
 type TableCustomer struct {
 	ID              string  `gorm:"primaryKey;type:varchar(255)" json:"id"`
@@ -19,6 +25,8 @@ type TableCustomer struct {
 	// Config hash is used to detect the changes synced from config.json file
 	// Every time we sync the config.json file, we will update the config hash
 	ConfigHash string `gorm:"type:varchar(255);null" json:"config_hash"`
+
+	HistoricalUsage *HistoricalUsage `gorm:"-" json:"historical_usage,omitempty"`
 
 	CreatedAt time.Time `gorm:"index;not null" json:"created_at"`
 	UpdatedAt time.Time `gorm:"index;not null" json:"updated_at"`

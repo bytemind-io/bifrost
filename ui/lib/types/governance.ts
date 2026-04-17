@@ -25,12 +25,19 @@ export interface RateLimit {
 	request_last_reset: string; // ISO timestamp
 }
 
+export interface HistoricalUsage {
+	total_cost: number;
+	total_tokens: number;
+	total_requests: number;
+}
+
 export interface Team {
 	id: string;
 	name: string;
 	customer_id?: string;
 	budget_id?: string;
 	rate_limit_id?: string;
+	historical_usage?: HistoricalUsage;
 	// Populated relationships
 	customer?: Customer;
 	budget?: Budget;
@@ -42,6 +49,7 @@ export interface Customer {
 	name: string;
 	budget_id?: string;
 	rate_limit_id?: string;
+	historical_usage?: HistoricalUsage;
 	// Populated relationships
 	teams?: Team[];
 	budget?: Budget;

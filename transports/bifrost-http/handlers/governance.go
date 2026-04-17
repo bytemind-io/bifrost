@@ -19,7 +19,9 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore"
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
+	"github.com/maximhq/bifrost/framework/logstore"
 	"github.com/maximhq/bifrost/plugins/governance"
+	"github.com/maximhq/bifrost/plugins/logging"
 	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
 	"github.com/valyala/fasthttp"
 	enterprise "github.com/workpieces/bifrost/plugins/enterprise"
@@ -47,10 +49,11 @@ type GovernanceManager interface {
 type GovernanceHandler struct {
 	configStore       configstore.ConfigStore
 	governanceManager GovernanceManager
+	logManager        logging.LogManager
 }
 
 // NewGovernanceHandler creates a new governance handler instance
-func NewGovernanceHandler(manager GovernanceManager, configStore configstore.ConfigStore) (*GovernanceHandler, error) {
+func NewGovernanceHandler(manager GovernanceManager, configStore configstore.ConfigStore, logManager logging.LogManager) (*GovernanceHandler, error) {
 	if manager == nil {
 		return nil, fmt.Errorf("governance manager is required")
 	}
@@ -60,7 +63,86 @@ func NewGovernanceHandler(manager GovernanceManager, configStore configstore.Con
 	return &GovernanceHandler{
 		governanceManager: manager,
 		configStore:       configStore,
+		logManager:        logManager,
 	}, nil
+}
+
+func (h *GovernanceHandler) getHistoricalUsage(ctx context.Context, virtualKeyIDs []string) *configstoreTables.HistoricalUsage {
+	if h == nil || h.logManager == nil || len(virtualKeyIDs) == 0 {
+		return nil
+	}
+
+	stats, err := h.logManager.GetStats(ctx, &logstore.SearchFilters{VirtualKeyIDs: virtualKeyIDs})
+	if err != nil || stats == nil {
+		return nil
+	}
+
+	return &configstoreTables.HistoricalUsage{
+		TotalCost:     stats.TotalCost,
+		TotalTokens:   stats.TotalTokens,
+		TotalRequests: stats.TotalRequests,
+	}
+}
+
+func (h *GovernanceHandler) attachHistoricalUsageToTeam(ctx context.Context, team *configstoreTables.TableTeam) {
+	if team == nil || h == nil || h.configStore == nil {
+		return
+	}
+
+	virtualKeys, err := h.configStore.GetVirtualKeys(ctx)
+	if err != nil {
+		return
+	}
+
+	ids := make([]string, 0, len(virtualKeys))
+	for _, vk := range virtualKeys {
+		if vk.TeamID != nil && *vk.TeamID == team.ID {
+			ids = append(ids, vk.ID)
+		}
+	}
+	team.HistoricalUsage = h.getHistoricalUsage(ctx, ids)
+}
+
+func (h *GovernanceHandler) attachHistoricalUsageToTeams(ctx context.Context, teams []configstoreTables.TableTeam) {
+	for i := range teams {
+		h.attachHistoricalUsageToTeam(ctx, &teams[i])
+	}
+}
+
+func (h *GovernanceHandler) attachHistoricalUsageToCustomer(ctx context.Context, customer *configstoreTables.TableCustomer) {
+	if customer == nil || h == nil || h.configStore == nil {
+		return
+	}
+
+	virtualKeys, err := h.configStore.GetVirtualKeys(ctx)
+	if err != nil {
+		return
+	}
+
+	teamIDs := make(map[string]struct{}, len(customer.Teams))
+	for _, team := range customer.Teams {
+		teamIDs[team.ID] = struct{}{}
+	}
+
+	ids := make([]string, 0, len(virtualKeys))
+	for _, vk := range virtualKeys {
+		if vk.CustomerID != nil && *vk.CustomerID == customer.ID {
+			ids = append(ids, vk.ID)
+			continue
+		}
+		if vk.TeamID != nil {
+			if _, ok := teamIDs[*vk.TeamID]; ok {
+				ids = append(ids, vk.ID)
+			}
+		}
+	}
+	customer.HistoricalUsage = h.getHistoricalUsage(ctx, ids)
+}
+
+func (h *GovernanceHandler) attachHistoricalUsageToCustomers(ctx context.Context, customers []configstoreTables.TableCustomer) {
+	for i := range customers {
+		h.attachHistoricalUsageToCustomer(ctx, &customers[i])
+	}
 }
 
 // CreateVirtualKeyRequest represents the request body for creating a virtual key
@@ -367,8 +449,15 @@ func stringPtrOrNil(value string) *string {
 }
 
 func isPrivilegedGovernanceRequest(ctx *fasthttp.RequestCtx) bool {
-	_, _, role, _ := enterprise.ExtractUserFromContext(ctx)
-	return role == "" || strings.EqualFold(role, "Admin")
+	userID, _, role, _ := enterprise.ExtractUserFromContext(ctx)
+	if strings.EqualFold(role, "Admin") {
+		return true
+	}
+	// Empty role + empty userID = OSS / non-enterprise build where RBAC middleware never ran;
+	// preserve the legacy full-access behavior. An authenticated request (userID set) whose
+	// role did not resolve to Admin is never privileged — refuses to fall open on a partial
+	// or tampered context.
+	return role == "" && userID == ""
 }
 
 func ownerMatches(resourceOwner *string, userID string) bool {
@@ -1382,6 +1471,7 @@ func (h *GovernanceHandler) getTeams(ctx *fasthttp.RequestCtx) {
 			SendJSON(ctx, map[string]interface{}{"teams": []interface{}{}, "count": 0, "total_count": 0, "limit": 0, "offset": 0})
 			return
 		}
+		h.attachHistoricalUsageToTeam(ctx, team)
 		SendJSON(ctx, map[string]interface{}{
 			"teams":       []interface{}{team},
 			"count":       1,
@@ -1444,6 +1534,7 @@ func (h *GovernanceHandler) getTeams(ctx *fasthttp.RequestCtx) {
 			SendError(ctx, 500, fmt.Sprintf("Failed to retrieve teams: %v", err))
 			return
 		}
+		h.attachHistoricalUsageToTeams(ctx, teams)
 		SendJSON(ctx, map[string]interface{}{
 			"teams":       teams,
 			"count":       len(teams),
@@ -1461,6 +1552,7 @@ func (h *GovernanceHandler) getTeams(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, 500, fmt.Sprintf("Failed to retrieve teams: %v", err))
 		return
 	}
+	h.attachHistoricalUsageToTeams(ctx, teams)
 	SendJSON(ctx, map[string]interface{}{
 		"teams":       teams,
 		"count":       len(teams),
@@ -1607,6 +1699,7 @@ func (h *GovernanceHandler) getTeam(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, 500, "Failed to retrieve team")
 		return
 	}
+	h.attachHistoricalUsageToTeam(ctx, team)
 	SendJSON(ctx, map[string]interface{}{
 		"team": team,
 	})
@@ -1857,6 +1950,7 @@ func (h *GovernanceHandler) getCustomers(ctx *fasthttp.RequestCtx) {
 			SendJSON(ctx, map[string]interface{}{"customers": []interface{}{}, "count": 0, "total_count": 0, "limit": 0, "offset": 0})
 			return
 		}
+		h.attachHistoricalUsageToCustomer(ctx, customer)
 		SendJSON(ctx, map[string]interface{}{
 			"customers":   []interface{}{customer},
 			"count":       1,
@@ -1902,6 +1996,7 @@ func (h *GovernanceHandler) getCustomers(ctx *fasthttp.RequestCtx) {
 			SendError(ctx, 500, "failed to retrieve customers")
 			return
 		}
+		h.attachHistoricalUsageToCustomers(ctx, customers)
 		SendJSON(ctx, map[string]interface{}{
 			"customers":   customers,
 			"count":       len(customers),
@@ -1918,6 +2013,7 @@ func (h *GovernanceHandler) getCustomers(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, 500, "failed to retrieve customers")
 		return
 	}
+	h.attachHistoricalUsageToCustomers(ctx, customers)
 	SendJSON(ctx, map[string]interface{}{
 		"customers":   customers,
 		"count":       len(customers),

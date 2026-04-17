@@ -3,13 +3,18 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
+	"os"
 	"testing"
 
+	"github.com/fasthttp/router"
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore"
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/plugins/governance"
 	"github.com/valyala/fasthttp"
+	"github.com/valyala/fasthttp/fasthttputil"
 	enterprise "github.com/workpieces/bifrost/plugins/enterprise"
 )
 
@@ -256,6 +261,170 @@ func TestRateLimitRemovalRequestDetection(t *testing.T) {
 			}
 		})
 	}
+}
+
+type testGovernanceManagerForDelete struct {
+	GovernanceManager
+	removedIDs []string
+}
+
+func (m *testGovernanceManagerForDelete) GetGovernanceData() *governance.GovernanceData {
+	return nil
+}
+
+func (m *testGovernanceManagerForDelete) RemoveVirtualKey(_ context.Context, id string) error {
+	m.removedIDs = append(m.removedIDs, id)
+	return nil
+}
+
+func TestDeleteVirtualKey_SoftDeleteAndRecreate(t *testing.T) {
+	SetLogger(&mockLogger{})
+
+	dbFile, err := os.CreateTemp("", "bifrost-vk-delete-*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp db file: %v", err)
+	}
+	dbPath := dbFile.Name()
+	_ = dbFile.Close()
+	defer os.Remove(dbPath)
+
+	store, err := configstore.NewConfigStore(context.Background(), &configstore.Config{
+		Enabled: true,
+		Type:    configstore.ConfigStoreTypeSQLite,
+		Config:  &configstore.SQLiteConfig{Path: dbPath},
+	}, &mockLogger{})
+	if err != nil {
+		t.Fatalf("failed to create config store: %v", err)
+	}
+	defer func() {
+		_ = store.Close(context.Background())
+	}()
+
+	ctx := context.Background()
+	teamID := "team-delete-test"
+	team := &configstoreTables.TableTeam{
+		ID:   teamID,
+		Name: "Delete Test Team",
+	}
+	if err := store.CreateTeam(ctx, team); err != nil {
+		t.Fatalf("failed to create team: %v", err)
+	}
+
+	vk := &configstoreTables.TableVirtualKey{
+		ID:       "vk-delete-test",
+		Name:     "Delete Test VK",
+		Value:    "sk-bf-delete-test",
+		IsActive: true,
+		TeamID:   &teamID,
+	}
+	if err := store.CreateVirtualKey(ctx, vk); err != nil {
+		t.Fatalf("failed to create virtual key: %v", err)
+	}
+
+	manager := &testGovernanceManagerForDelete{}
+	h := &GovernanceHandler{
+		configStore:       store,
+		governanceManager: manager,
+	}
+
+	r := router.New()
+	r.DELETE("/api/governance/virtual-keys/{vk_id}", h.deleteVirtualKey)
+
+	ln := fasthttputil.NewInmemoryListener()
+	defer ln.Close()
+
+	srv := &fasthttp.Server{Handler: r.Handler}
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- srv.Serve(ln)
+	}()
+	defer func() {
+		_ = srv.Shutdown()
+		<-serverErr
+	}()
+
+	client := &fasthttp.Client{
+		Dial: func(_ string) (net.Conn, error) {
+			return ln.Dial()
+		},
+	}
+
+	req := fasthttp.AcquireRequest()
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseRequest(req)
+	defer fasthttp.ReleaseResponse(resp)
+
+	req.Header.SetMethod(fasthttp.MethodDelete)
+	req.SetRequestURI("http://bifrost.test/api/governance/virtual-keys/" + vk.ID)
+
+	if err := client.Do(req, resp); err != nil {
+		t.Fatalf("failed to execute delete request: %v", err)
+	}
+
+	if resp.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode(), string(resp.Body()))
+	}
+
+	if len(manager.removedIDs) != 1 || manager.removedIDs[0] != vk.ID {
+		t.Fatalf("expected governance manager RemoveVirtualKey to be called with %s, got %+v", vk.ID, manager.removedIDs)
+	}
+
+	if _, err := store.GetVirtualKey(ctx, vk.ID); err == nil {
+		t.Fatalf("expected soft-deleted VK to be hidden from GetVirtualKey")
+	}
+
+	virtualKeys, err := store.GetVirtualKeys(ctx)
+	if err != nil {
+		t.Fatalf("failed to get virtual keys: %v", err)
+	}
+	if len(virtualKeys) != 0 {
+		t.Fatalf("expected no active virtual keys after delete, got %d", len(virtualKeys))
+	}
+
+	recreated := &configstoreTables.TableVirtualKey{
+		ID:       "vk-delete-test-recreated",
+		Name:     "Delete Test VK",
+		Value:    "sk-bf-delete-test",
+		IsActive: true,
+	}
+	if err := store.CreateVirtualKey(ctx, recreated); err != nil {
+		t.Fatalf("expected recreate with same name/value to succeed, got: %v", err)
+	}
+
+	found, err := store.GetVirtualKey(ctx, recreated.ID)
+	if err != nil {
+		t.Fatalf("failed to load recreated virtual key: %v", err)
+	}
+	if found.Name != recreated.Name || found.Value != recreated.Value {
+		t.Fatalf("unexpected recreated virtual key: got name=%q value=%q", found.Name, found.Value)
+	}
+
+	rdb, ok := store.(*configstore.RDBConfigStore)
+	if !ok {
+		t.Fatalf("expected SQLite config store to be *configstore.RDBConfigStore, got %T", store)
+	}
+
+	var raw configstoreTables.TableVirtualKey
+	if err := rdb.DB().WithContext(ctx).Unscoped().First(&raw, "id = ?", vk.ID).Error; err != nil {
+		t.Fatalf("failed to load soft-deleted row: %v", err)
+	}
+	if !raw.DeletedAt.Valid {
+		t.Fatalf("expected deleted_at to be set on soft-deleted row")
+	}
+	if raw.IsActive {
+		t.Fatalf("expected soft-deleted row to be inactive")
+	}
+	if raw.Name == "Delete Test VK" {
+		t.Fatalf("expected soft-deleted row name to be tombstoned, got %q", raw.Name)
+	}
+	if raw.Value == "sk-bf-delete-test" {
+		t.Fatalf("expected soft-deleted row value to be tombstoned, got %q", raw.Value)
+	}
+	if raw.Name == "" || raw.Value == "" {
+		t.Fatalf("expected soft-deleted row tombstone fields to be non-empty: %+v", raw)
+	}
+
+	t.Logf("soft delete row tombstoned as name=%s", fmt.Sprintf("%.32s", raw.Name))
 }
 
 func TestCollectProviderConfigDeleteIDs(t *testing.T) {

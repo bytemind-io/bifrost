@@ -1779,16 +1779,54 @@ func (s *RDBConfigStore) GetAllRedactedKeys(ctx context.Context, ids []string) (
 	return redactedKeys, nil
 }
 
-// DeleteVirtualKey deletes a virtual key from the database.
+// DeleteVirtualKey soft-deletes a virtual key and hard-deletes its dependent rows.
+// The VK row itself is tombstoned (unique name/value rewritten) and has deleted_at set so
+// the same name/value can be reused. Dependent rows — provider configs, MCP configs, and
+// the budgets/rate limits owned by the VK or its provider configs — are hard-deleted,
+// because the VK's soft delete does not trigger SQL-level ON DELETE CASCADE.
 func (s *RDBConfigStore) DeleteVirtualKey(ctx context.Context, id string) error {
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var virtualKey tables.TableVirtualKey
-		if err := tx.WithContext(ctx).First(&virtualKey, "id = ?", id).Error; err != nil {
+		if err := tx.WithContext(ctx).Preload("ProviderConfigs").First(&virtualKey, "id = ?", id).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrNotFound
 			}
 			return err
 		}
+
+		var providerConfigBudgetIDs []string
+		var providerConfigRateLimitIDs []string
+		for _, pc := range virtualKey.ProviderConfigs {
+			if err := tx.WithContext(ctx).Exec("DELETE FROM governance_virtual_key_provider_config_keys WHERE table_virtual_key_provider_config_id = ?", pc.ID).Error; err != nil {
+				return err
+			}
+			if pc.BudgetID != nil {
+				providerConfigBudgetIDs = append(providerConfigBudgetIDs, *pc.BudgetID)
+			}
+			if pc.RateLimitID != nil {
+				providerConfigRateLimitIDs = append(providerConfigRateLimitIDs, *pc.RateLimitID)
+			}
+		}
+
+		if err := tx.WithContext(ctx).Delete(&tables.TableVirtualKeyProviderConfig{}, "virtual_key_id = ?", id).Error; err != nil {
+			return err
+		}
+		for _, budgetID := range providerConfigBudgetIDs {
+			if err := tx.WithContext(ctx).Delete(&tables.TableBudget{}, "id = ?", budgetID).Error; err != nil {
+				return err
+			}
+		}
+		for _, rateLimitID := range providerConfigRateLimitIDs {
+			if err := tx.WithContext(ctx).Delete(&tables.TableRateLimit{}, "id = ?", rateLimitID).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.WithContext(ctx).Delete(&tables.TableVirtualKeyMCPConfig{}, "virtual_key_id = ?", id).Error; err != nil {
+			return err
+		}
+
+		vkBudgetID := virtualKey.BudgetID
+		vkRateLimitID := virtualKey.RateLimitID
 
 		tombstoneValue := fmt.Sprintf("%s:%s:%d", deletedVirtualKeyNamePrefix, virtualKey.ID, time.Now().UnixNano())
 		updates := map[string]interface{}{
@@ -1797,17 +1835,32 @@ func (s *RDBConfigStore) DeleteVirtualKey(ctx context.Context, id string) error 
 			"value_hash":        encrypt.HashSHA256(tombstoneValue),
 			"is_active":         false,
 			"encryption_status": tables.EncryptionStatusPlainText,
+			"budget_id":         nil,
+			"rate_limit_id":     nil,
 		}
-
-		if err := tx.WithContext(ctx).Model(&virtualKey).Updates(updates).Error; err != nil {
+		// NOTE: must route through a zero-value model + Where, not Model(&virtualKey).
+		// virtualKey was loaded with Preload("ProviderConfigs"), and GORM auto-saves
+		// association slices on Updates — which would re-INSERT the provider configs
+		// we just hard-deleted.
+		if err := tx.WithContext(ctx).Model(&tables.TableVirtualKey{}).Where("id = ?", virtualKey.ID).Updates(updates).Error; err != nil {
 			return err
 		}
-
-		if err := tx.WithContext(ctx).Delete(&virtualKey).Error; err != nil {
+		if err := tx.WithContext(ctx).Delete(&tables.TableVirtualKey{}, "id = ?", virtualKey.ID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrNotFound
 			}
 			return err
+		}
+
+		if vkBudgetID != nil {
+			if err := tx.WithContext(ctx).Delete(&tables.TableBudget{}, "id = ?", *vkBudgetID).Error; err != nil {
+				return err
+			}
+		}
+		if vkRateLimitID != nil {
+			if err := tx.WithContext(ctx).Delete(&tables.TableRateLimit{}, "id = ?", *vkRateLimitID).Error; err != nil {
+				return err
+			}
 		}
 		return nil
 	}); err != nil {

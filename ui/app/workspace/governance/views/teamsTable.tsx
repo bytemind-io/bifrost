@@ -311,6 +311,7 @@ export default function TeamsTable({ teams, totalCount, customers, virtualKeys, 
 									<TableHead>Customer</TableHead>
 									<TableHead>Budget</TableHead>
 									<TableHead>Rate Limit</TableHead>
+									<TableHead>Historical Usage</TableHead>
 									<TableHead>Virtual Keys</TableHead>
 									<TableHead className="text-right"></TableHead>
 								</TableRow>
@@ -318,7 +319,7 @@ export default function TeamsTable({ teams, totalCount, customers, virtualKeys, 
 							<TableBody>
 								{teams.length === 0 ? (
 									<TableRow>
-										<TableCell colSpan={6} className="h-24 text-center">
+										<TableCell colSpan={7} className="h-24 text-center">
 											<span className="text-muted-foreground text-sm">No matching teams found.</span>
 										</TableCell>
 									</TableRow>
@@ -477,6 +478,26 @@ export default function TeamsTable({ teams, totalCount, customers, virtualKeys, 
 																</TooltipContent>
 															</Tooltip>
 														)}
+													</div>
+												) : (
+													<span className="text-muted-foreground text-sm">-</span>
+												)}
+											</TableCell>
+											<TableCell className="min-w-[190px]">
+												{team.historical_usage ? (
+													<div className="space-y-1.5 text-sm">
+														<div className="flex items-center justify-between gap-3">
+															<span className="text-muted-foreground text-xs">Cost</span>
+															<span className="font-medium">{formatCurrency(team.historical_usage.total_cost)}</span>
+														</div>
+														<div className="flex items-center justify-between gap-3">
+															<span className="text-muted-foreground text-xs">Tokens</span>
+															<span className="font-medium">{team.historical_usage.total_tokens.toLocaleString()}</span>
+														</div>
+														<div className="flex items-center justify-between gap-3">
+															<span className="text-muted-foreground text-xs">Requests</span>
+															<span className="font-medium">{team.historical_usage.total_requests.toLocaleString()}</span>
+														</div>
 													</div>
 												) : (
 													<span className="text-muted-foreground text-sm">-</span>

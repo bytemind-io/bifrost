@@ -15433,31 +15433,34 @@ var excludedGoFields = map[string]map[string]bool{
 		"updated_at":  true,
 	},
 	"tables.TableCustomer": {
-		"config_hash":  true,
-		"created_at":   true,
-		"updated_at":   true,
-		"budget":       true, // GORM relation
-		"rate_limit":   true, // GORM relation
-		"teams":        true, // GORM relation
-		"virtual_keys": true, // GORM relation
+		"created_by_user_id": true,
+		"config_hash":        true,
+		"created_at":         true,
+		"updated_at":         true,
+		"budget":             true, // GORM relation
+		"rate_limit":         true, // GORM relation
+		"teams":              true, // GORM relation
+		"virtual_keys":       true, // GORM relation
 	},
 	"tables.TableTeam": {
-		"config_hash":  true,
-		"created_at":   true,
-		"updated_at":   true,
-		"budget":       true, // GORM relation
-		"rate_limit":   true, // GORM relation
-		"customer":     true, // GORM relation
-		"virtual_keys": true, // GORM relation
+		"created_by_user_id": true,
+		"config_hash":        true,
+		"created_at":         true,
+		"updated_at":         true,
+		"budget":             true, // GORM relation
+		"rate_limit":         true, // GORM relation
+		"customer":           true, // GORM relation
+		"virtual_keys":       true, // GORM relation
 	},
 	"tables.TableVirtualKey": {
-		"config_hash": true,
-		"created_at":  true,
-		"updated_at":  true,
-		"budget":      true, // GORM relation
-		"rate_limit":  true, // GORM relation
-		"team":        true, // GORM relation
-		"customer":    true, // GORM relation
+		"created_by_user_id": true,
+		"config_hash":        true,
+		"created_at":         true,
+		"updated_at":         true,
+		"budget":             true, // GORM relation
+		"rate_limit":         true, // GORM relation
+		"team":               true, // GORM relation
+		"customer":           true, // GORM relation
 	},
 	"tables.TableVirtualKeyProviderConfig": {
 		"budget":     true, // GORM relation
@@ -15752,13 +15755,13 @@ func TestConfigSchemaSyncTopLevel(t *testing.T) {
 	// Enterprise-only features: These fields exist in the JSON schema for documentation
 	// and validation purposes, but are only available in the enterprise version.
 	enterpriseSchemaFields := map[string]bool{
-		"$schema":                      true,
-		"audit_logs":                   true,
-		"cluster_config":               true,
-		"saml_config":                  true,
-		"load_balancer_config":         true,
-		"guardrails_config":            true,
-		"large_payload_optimization":   true,
+		"$schema":                    true,
+		"audit_logs":                 true,
+		"cluster_config":             true,
+		"saml_config":                true,
+		"load_balancer_config":       true,
+		"guardrails_config":          true,
+		"large_payload_optimization": true,
 	}
 
 	schema := loadJSONSchema(t)
