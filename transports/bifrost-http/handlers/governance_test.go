@@ -10,6 +10,7 @@ import (
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/plugins/governance"
 	"github.com/valyala/fasthttp"
+	enterprise "github.com/workpieces/bifrost/plugins/enterprise"
 )
 
 // mockGovernanceManagerForVK embeds the interface so unimplemented methods panic.
@@ -334,4 +335,55 @@ func bifrostString(v string) *string {
 
 func bifrostBool(v bool) *bool {
 	return &v
+}
+
+func TestGovernanceWriteAccess_VirtualKey(t *testing.T) {
+	h := &GovernanceHandler{}
+
+	adminCtx := &fasthttp.RequestCtx{}
+	adminCtx.SetUserValue(enterprise.CtxKeyUserRole, "Admin")
+	if !h.canManageVirtualKey(adminCtx, &configstoreTables.TableVirtualKey{}) {
+		t.Fatal("admin should manage any virtual key")
+	}
+
+	legacyCtx := &fasthttp.RequestCtx{}
+	if !h.canManageVirtualKey(legacyCtx, &configstoreTables.TableVirtualKey{}) {
+		t.Fatal("legacy non-enterprise request should stay allowed")
+	}
+
+	ownerID := "user-1"
+	userCtx := &fasthttp.RequestCtx{}
+	userCtx.SetUserValue(enterprise.CtxKeyUserRole, "Developer")
+	userCtx.SetUserValue(enterprise.CtxKeyUserID, ownerID)
+	if !h.canManageVirtualKey(userCtx, &configstoreTables.TableVirtualKey{CreatedByUserID: &ownerID}) {
+		t.Fatal("creator should manage owned virtual key")
+	}
+
+	otherOwner := "user-2"
+	if h.canManageVirtualKey(userCtx, &configstoreTables.TableVirtualKey{CreatedByUserID: &otherOwner}) {
+		t.Fatal("non-owner should not manage someone else's virtual key")
+	}
+}
+
+func TestGovernanceWriteAccess_TeamAndCustomer(t *testing.T) {
+	h := &GovernanceHandler{}
+
+	userID := "user-1"
+	ctx := &fasthttp.RequestCtx{}
+	ctx.SetUserValue(enterprise.CtxKeyUserRole, "Developer")
+	ctx.SetUserValue(enterprise.CtxKeyUserID, userID)
+
+	if !h.canManageTeam(ctx, &configstoreTables.TableTeam{CreatedByUserID: &userID}) {
+		t.Fatal("creator should manage owned team")
+	}
+	if h.canManageTeam(ctx, &configstoreTables.TableTeam{}) {
+		t.Fatal("non-owner should not manage team without matching creator")
+	}
+
+	if !h.canManageCustomer(ctx, &configstoreTables.TableCustomer{CreatedByUserID: &userID}) {
+		t.Fatal("creator should manage owned customer")
+	}
+	if h.canManageCustomer(ctx, &configstoreTables.TableCustomer{}) {
+		t.Fatal("non-owner should not manage customer without matching creator")
+	}
 }

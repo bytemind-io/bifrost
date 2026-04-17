@@ -20,6 +20,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const deletedVirtualKeyNamePrefix = "__deleted__"
+
 // RDBConfigStore represents a configuration store that uses a relational database.
 type RDBConfigStore struct {
 	db     *gorm.DB
@@ -1781,69 +1783,31 @@ func (s *RDBConfigStore) GetAllRedactedKeys(ctx context.Context, ids []string) (
 func (s *RDBConfigStore) DeleteVirtualKey(ctx context.Context, id string) error {
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var virtualKey tables.TableVirtualKey
-		if err := tx.WithContext(ctx).Preload("ProviderConfigs").First(&virtualKey, "id = ?", id).Error; err != nil {
+		if err := tx.WithContext(ctx).First(&virtualKey, "id = ?", id).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrNotFound
 			}
 			return err
 		}
 
-		// Collect budget and rate limit IDs from provider configs before deletion
-		var providerConfigBudgetIDs []string
-		var providerConfigRateLimitIDs []string
-		for _, pc := range virtualKey.ProviderConfigs {
-			// Delete the keys join table entries
-			if err := tx.WithContext(ctx).Exec("DELETE FROM governance_virtual_key_provider_config_keys WHERE table_virtual_key_provider_config_id = ?", pc.ID).Error; err != nil {
-				return err
-			}
-			// Collect budget and rate limit IDs for deletion after provider config
-			if pc.BudgetID != nil {
-				providerConfigBudgetIDs = append(providerConfigBudgetIDs, *pc.BudgetID)
-			}
-			if pc.RateLimitID != nil {
-				providerConfigRateLimitIDs = append(providerConfigRateLimitIDs, *pc.RateLimitID)
-			}
+		tombstoneValue := fmt.Sprintf("%s:%s:%d", deletedVirtualKeyNamePrefix, virtualKey.ID, time.Now().UnixNano())
+		updates := map[string]interface{}{
+			"name":              fmt.Sprintf("%s:%s", deletedVirtualKeyNamePrefix, virtualKey.ID),
+			"value":             tombstoneValue,
+			"value_hash":        encrypt.HashSHA256(tombstoneValue),
+			"is_active":         false,
+			"encryption_status": tables.EncryptionStatusPlainText,
 		}
 
-		// Delete all provider configs associated with the virtual key first
-		if err := tx.WithContext(ctx).Delete(&tables.TableVirtualKeyProviderConfig{}, "virtual_key_id = ?", id).Error; err != nil {
+		if err := tx.WithContext(ctx).Model(&virtualKey).Updates(updates).Error; err != nil {
 			return err
 		}
-		// Now delete the collected budgets and rate limits
-		for _, budgetID := range providerConfigBudgetIDs {
-			if err := tx.WithContext(ctx).Delete(&tables.TableBudget{}, "id = ?", budgetID).Error; err != nil {
-				return err
-			}
-		}
-		for _, rateLimitID := range providerConfigRateLimitIDs {
-			if err := tx.WithContext(ctx).Delete(&tables.TableRateLimit{}, "id = ?", rateLimitID).Error; err != nil {
-				return err
-			}
-		}
-		// Delete all MCP configs associated with the virtual key
-		if err := tx.WithContext(ctx).Delete(&tables.TableVirtualKeyMCPConfig{}, "virtual_key_id = ?", id).Error; err != nil {
-			return err
-		}
-		// Delete the budget associated with the virtual key
-		budgetID := virtualKey.BudgetID
-		rateLimitID := virtualKey.RateLimitID
-		// Delete the virtual key
-		if err := tx.WithContext(ctx).Delete(&tables.TableVirtualKey{}, "id = ?", id).Error; err != nil {
+
+		if err := tx.WithContext(ctx).Delete(&virtualKey).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrNotFound
 			}
 			return err
-		}
-		if budgetID != nil {
-			if err := tx.WithContext(ctx).Delete(&tables.TableBudget{}, "id = ?", *budgetID).Error; err != nil {
-				return err
-			}
-		}
-		// Delete the rate limit associated with the virtual key
-		if rateLimitID != nil {
-			if err := tx.WithContext(ctx).Delete(&tables.TableRateLimit{}, "id = ?", *rateLimitID).Error; err != nil {
-				return err
-			}
 		}
 		return nil
 	}); err != nil {

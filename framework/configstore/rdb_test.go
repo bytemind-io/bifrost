@@ -3,6 +3,7 @@ package configstore
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/maximhq/bifrost/core/schemas"
@@ -546,6 +547,30 @@ func TestDeleteVirtualKey(t *testing.T) {
 
 	_, err = store.GetVirtualKey(ctx, "vk-delete")
 	assert.Error(t, err, "Should not find deleted virtual key")
+
+	_, err = store.GetVirtualKeyByValue(ctx, "vk-delete-value")
+	assert.Error(t, err, "Soft-deleted virtual key should not resolve by value")
+
+	var raw tables.TableVirtualKey
+	err = store.db.WithContext(ctx).Unscoped().First(&raw, "id = ?", "vk-delete").Error
+	require.NoError(t, err)
+	assert.False(t, raw.IsActive)
+	assert.True(t, raw.DeletedAt.Valid, "DeletedAt should be set for soft-deleted virtual key")
+	assert.True(t, strings.HasPrefix(raw.Name, deletedVirtualKeyNamePrefix+":"), "Deleted key name should be tombstoned")
+	assert.NotEqual(t, "vk-delete-value", raw.Value, "Deleted key value should be tombstoned")
+
+	recreated := &tables.TableVirtualKey{
+		ID:       "vk-delete-recreated",
+		Name:     "Delete Me",
+		Value:    "vk-delete-value",
+		IsActive: true,
+	}
+	err = store.CreateVirtualKey(ctx, recreated)
+	require.NoError(t, err, "Should allow recreating a virtual key with the original name/value after soft delete")
+
+	result, err := store.GetVirtualKeyByValue(ctx, "vk-delete-value")
+	require.NoError(t, err)
+	assert.Equal(t, "vk-delete-recreated", result.ID)
 }
 
 // =============================================================================

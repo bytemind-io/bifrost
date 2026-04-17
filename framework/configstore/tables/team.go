@@ -10,11 +10,12 @@ import (
 
 // TableTeam represents a team entity with budget, rate limit and customer association
 type TableTeam struct {
-	ID          string  `gorm:"primaryKey;type:varchar(255)" json:"id"`
-	Name        string  `gorm:"type:varchar(255);not null" json:"name"`
-	CustomerID  *string `gorm:"type:varchar(255);index" json:"customer_id,omitempty"` // A team can belong to a customer
-	BudgetID    *string `gorm:"type:varchar(255);index" json:"budget_id,omitempty"`
-	RateLimitID *string `gorm:"type:varchar(255);index" json:"rate_limit_id,omitempty"`
+	ID              string  `gorm:"primaryKey;type:varchar(255)" json:"id"`
+	Name            string  `gorm:"type:varchar(255);not null" json:"name"`
+	CreatedByUserID *string `gorm:"type:varchar(255);index" json:"created_by_user_id,omitempty"`
+	CustomerID      *string `gorm:"type:varchar(255);index" json:"customer_id,omitempty"` // A team can belong to a customer
+	BudgetID        *string `gorm:"type:varchar(255);index" json:"budget_id,omitempty"`
+	RateLimitID     *string `gorm:"type:varchar(255);index" json:"rate_limit_id,omitempty"`
 
 	// Relationships
 	Customer    *TableCustomer    `gorm:"foreignKey:CustomerID" json:"customer,omitempty"`

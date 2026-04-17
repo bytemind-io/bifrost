@@ -73,6 +73,17 @@ const RESOURCE_LABELS: Record<string,string> = {
 	PromptDeploymentStrategy:"Prompt Deployments",
 };
 
+const getInitialSelectedResource = (permissionMap: Record<string, Record<string, boolean>>) => {
+	for (const resource of ALL_RESOURCES) {
+		const ops = permissionMap[resource];
+		if (ops && Object.values(ops).some(Boolean)) {
+			return resource;
+		}
+	}
+
+	return ALL_RESOURCES[0];
+};
+
 export default function RBACView() {
 	const [roles, setRoles] = useState<Role[]>([]); const [isLoading, setIsLoading] = useState(true);
 	const [createOpen, setCreateOpen] = useState(false); const [newName, setNewName] = useState(""); const [newDesc, setNewDesc] = useState(""); const [isSaving, setIsSaving] = useState(false);
@@ -107,7 +118,7 @@ export default function RBACView() {
 			const map: Record<string, Record<string, boolean>> = {};
 			for (const r of ALL_RESOURCES) { map[r] = {}; for (const op of ALL_OPERATIONS) map[r][op] = false; }
 			for (const p of perms) { if (map[p.resource]) map[p.resource][p.operation] = true; }
-			setPermissions(map); setPermRole(role); setSelectedResource(ALL_RESOURCES[0]); setPermOpen(true);
+			setPermissions(map); setPermRole(role); setSelectedResource(getInitialSelectedResource(map)); setPermOpen(true);
 		} catch (err: any) { toast.error(err.message); }
 	};
 	const handleSavePermissions = async () => {

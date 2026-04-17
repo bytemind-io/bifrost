@@ -22,6 +22,7 @@ import (
 	"github.com/maximhq/bifrost/plugins/governance"
 	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
 	"github.com/valyala/fasthttp"
+	enterprise "github.com/workpieces/bifrost/plugins/enterprise"
 	"gorm.io/gorm"
 )
 
@@ -358,6 +359,53 @@ func matchesEnterpriseScope(vk *configstoreTables.TableVirtualKey, scope enterpr
 	return false
 }
 
+func stringPtrOrNil(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func isPrivilegedGovernanceRequest(ctx *fasthttp.RequestCtx) bool {
+	_, _, role, _ := enterprise.ExtractUserFromContext(ctx)
+	return role == "" || strings.EqualFold(role, "Admin")
+}
+
+func ownerMatches(resourceOwner *string, userID string) bool {
+	return resourceOwner != nil && userID != "" && *resourceOwner == userID
+}
+
+func customerMatchesScope(customerID string, scope enterpriseScope) bool {
+	return scope.CustomerID != "" && customerID != "" && customerID == scope.CustomerID
+}
+
+func (h *GovernanceHandler) canManageVirtualKey(ctx *fasthttp.RequestCtx, vk *configstoreTables.TableVirtualKey) bool {
+	if isPrivilegedGovernanceRequest(ctx) {
+		return true
+	}
+
+	userID, _, _, _ := enterprise.ExtractUserFromContext(ctx)
+	return ownerMatches(vk.CreatedByUserID, userID)
+}
+
+func (h *GovernanceHandler) canManageTeam(ctx *fasthttp.RequestCtx, team *configstoreTables.TableTeam) bool {
+	if isPrivilegedGovernanceRequest(ctx) {
+		return true
+	}
+
+	userID, _, _, _ := enterprise.ExtractUserFromContext(ctx)
+	return ownerMatches(team.CreatedByUserID, userID)
+}
+
+func (h *GovernanceHandler) canManageCustomer(ctx *fasthttp.RequestCtx, customer *configstoreTables.TableCustomer) bool {
+	if isPrivilegedGovernanceRequest(ctx) {
+		return true
+	}
+
+	userID, _, _, _ := enterprise.ExtractUserFromContext(ctx)
+	return ownerMatches(customer.CreatedByUserID, userID)
+}
+
 // getVirtualKeys handles GET /api/governance/virtual-keys - Get all virtual keys with relationships
 func (h *GovernanceHandler) getVirtualKeys(ctx *fasthttp.RequestCtx) {
 	// Check if "from_memory" query parameter is set to true
@@ -534,16 +582,19 @@ func (h *GovernanceHandler) createVirtualKey(ctx *fasthttp.RequestCtx) {
 	if req.IsActive != nil {
 		isActive = *req.IsActive
 	}
+	userID, _, _, _ := enterprise.ExtractUserFromContext(ctx)
+	createdByUserID := stringPtrOrNil(userID)
 	var vk configstoreTables.TableVirtualKey
 	if err := h.configStore.ExecuteTransaction(ctx, func(tx *gorm.DB) error {
 		vk = configstoreTables.TableVirtualKey{
-			ID:          uuid.NewString(),
-			Name:        req.Name,
-			Value:       governance.GenerateVirtualKey(),
-			Description: req.Description,
-			TeamID:      req.TeamID,
-			CustomerID:  req.CustomerID,
-			IsActive:    isActive,
+			ID:              uuid.NewString(),
+			Name:            req.Name,
+			Value:           governance.GenerateVirtualKey(),
+			Description:     req.Description,
+			TeamID:          req.TeamID,
+			CustomerID:      req.CustomerID,
+			IsActive:        isActive,
+			CreatedByUserID: createdByUserID,
 		}
 		if req.Budget != nil {
 			budget := configstoreTables.TableBudget{
@@ -763,6 +814,10 @@ func (h *GovernanceHandler) updateVirtualKey(ctx *fasthttp.RequestCtx) {
 			return
 		}
 		SendError(ctx, 500, "Failed to retrieve virtual key")
+		return
+	}
+	if !h.canManageVirtualKey(ctx, vk) {
+		SendError(ctx, 403, "Forbidden")
 		return
 	}
 	if err := h.configStore.ExecuteTransaction(ctx, func(tx *gorm.DB) error {
@@ -1279,6 +1334,10 @@ func (h *GovernanceHandler) deleteVirtualKey(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, 500, "Failed to retrieve virtual key")
 		return
 	}
+	if !h.canManageVirtualKey(ctx, vk) {
+		SendError(ctx, 403, "Forbidden")
+		return
+	}
 	// Removing key from in-memory store
 	err = h.governanceManager.RemoveVirtualKey(ctx, vk.ID)
 	if err != nil {
@@ -1449,12 +1508,21 @@ func (h *GovernanceHandler) createTeam(ctx *fasthttp.RequestCtx) {
 		}
 	}
 	// Creating team in database
+	userID, _, _, teamID := enterprise.ExtractUserFromContext(ctx)
+	if !isPrivilegedGovernanceRequest(ctx) && teamID != nil && req.CustomerID == nil {
+		currentTeam, err := h.configStore.GetTeam(ctx, *teamID)
+		if err == nil && currentTeam != nil && currentTeam.CustomerID != nil {
+			req.CustomerID = currentTeam.CustomerID
+		}
+	}
+	createdByUserID := stringPtrOrNil(userID)
 	var team configstoreTables.TableTeam
 	if err := h.configStore.ExecuteTransaction(ctx, func(tx *gorm.DB) error {
 		team = configstoreTables.TableTeam{
-			ID:         uuid.NewString(),
-			Name:       req.Name,
-			CustomerID: req.CustomerID,
+			ID:              uuid.NewString(),
+			Name:            req.Name,
+			CustomerID:      req.CustomerID,
+			CreatedByUserID: createdByUserID,
 		}
 		if req.Budget != nil {
 			budget := configstoreTables.TableBudget{
@@ -1561,6 +1629,10 @@ func (h *GovernanceHandler) updateTeam(ctx *fasthttp.RequestCtx) {
 			return
 		}
 		SendError(ctx, 500, "Failed to retrieve team")
+		return
+	}
+	if !h.canManageTeam(ctx, team) {
+		SendError(ctx, 403, "Forbidden")
 		return
 	}
 	// Updating team in database
@@ -1741,6 +1813,10 @@ func (h *GovernanceHandler) deleteTeam(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, 500, "Failed to retrieve team")
 		return
 	}
+	if !h.canManageTeam(ctx, team) {
+		SendError(ctx, 403, "Forbidden")
+		return
+	}
 	// Removing team from in-memory store
 	err = h.governanceManager.RemoveTeam(ctx, team.ID)
 	if err != nil {
@@ -1888,11 +1964,14 @@ func (h *GovernanceHandler) createCustomer(ctx *fasthttp.RequestCtx) {
 			return
 		}
 	}
+	userID, _, _, _ := enterprise.ExtractUserFromContext(ctx)
+	createdByUserID := stringPtrOrNil(userID)
 	var customer configstoreTables.TableCustomer
 	if err := h.configStore.ExecuteTransaction(ctx, func(tx *gorm.DB) error {
 		customer = configstoreTables.TableCustomer{
-			ID:   uuid.NewString(),
-			Name: req.Name,
+			ID:              uuid.NewString(),
+			Name:            req.Name,
+			CreatedByUserID: createdByUserID,
 		}
 
 		if req.Budget != nil {
@@ -1997,6 +2076,10 @@ func (h *GovernanceHandler) updateCustomer(ctx *fasthttp.RequestCtx) {
 			return
 		}
 		SendError(ctx, 500, "Failed to retrieve customer")
+		return
+	}
+	if !h.canManageCustomer(ctx, customer) {
+		SendError(ctx, 403, "Forbidden")
 		return
 	}
 	// Updating customer in database
@@ -2170,6 +2253,10 @@ func (h *GovernanceHandler) deleteCustomer(ctx *fasthttp.RequestCtx) {
 			return
 		}
 		SendError(ctx, 500, "Failed to retrieve customer")
+		return
+	}
+	if !h.canManageCustomer(ctx, customer) {
+		SendError(ctx, 403, "Forbidden")
 		return
 	}
 	err = h.governanceManager.RemoveCustomer(ctx, customer.ID)

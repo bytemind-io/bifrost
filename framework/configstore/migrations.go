@@ -338,6 +338,96 @@ func triggerMigrations(ctx context.Context, db *gorm.DB) error {
 	if err := migrationAddFlexTierPricingColumns(ctx, db); err != nil {
 		return err
 	}
+	if err := migrationAddGovernanceCreatedByColumns(ctx, db); err != nil {
+		return err
+	}
+	if err := migrationAddVirtualKeySoftDeleteColumn(ctx, db); err != nil {
+		return err
+	}
+	return nil
+}
+
+func migrationAddGovernanceCreatedByColumns(ctx context.Context, db *gorm.DB) error {
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "add_governance_created_by_columns",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			mgr := tx.Migrator()
+
+			targets := []interface{}{
+				&tables.TableVirtualKey{},
+				&tables.TableTeam{},
+				&tables.TableCustomer{},
+			}
+
+			for _, target := range targets {
+				if !mgr.HasColumn(target, "created_by_user_id") {
+					if err := mgr.AddColumn(target, "created_by_user_id"); err != nil {
+						return fmt.Errorf("failed to add created_by_user_id column: %w", err)
+					}
+				}
+			}
+
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			mgr := tx.Migrator()
+
+			targets := []interface{}{
+				&tables.TableVirtualKey{},
+				&tables.TableTeam{},
+				&tables.TableCustomer{},
+			}
+
+			for _, target := range targets {
+				if mgr.HasColumn(target, "created_by_user_id") {
+					if err := mgr.DropColumn(target, "created_by_user_id"); err != nil {
+						return fmt.Errorf("failed to drop created_by_user_id column: %w", err)
+					}
+				}
+			}
+
+			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error while running governance created_by migration: %s", err.Error())
+	}
+	return nil
+}
+
+func migrationAddVirtualKeySoftDeleteColumn(ctx context.Context, db *gorm.DB) error {
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "add_virtual_key_deleted_at_column",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			mgr := tx.Migrator()
+
+			if !mgr.HasColumn(&tables.TableVirtualKey{}, "deleted_at") {
+				if err := mgr.AddColumn(&tables.TableVirtualKey{}, "DeletedAt"); err != nil {
+					return fmt.Errorf("failed to add deleted_at column to virtual keys: %w", err)
+				}
+			}
+
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			mgr := tx.Migrator()
+
+			if mgr.HasColumn(&tables.TableVirtualKey{}, "deleted_at") {
+				if err := mgr.DropColumn(&tables.TableVirtualKey{}, "DeletedAt"); err != nil {
+					return fmt.Errorf("failed to drop deleted_at column from virtual keys: %w", err)
+				}
+			}
+
+			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error while running virtual key soft delete migration: %s", err.Error())
+	}
 	return nil
 }
 

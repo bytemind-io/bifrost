@@ -191,6 +191,7 @@ type TableVirtualKey struct {
 	Description     string                          `gorm:"type:text" json:"description,omitempty"`
 	Value           string                          `gorm:"uniqueIndex:idx_virtual_key_value;type:text;not null" json:"value"` // The virtual key value
 	IsActive        bool                            `gorm:"default:true" json:"is_active"`
+	CreatedByUserID *string                         `gorm:"type:varchar(255);index" json:"created_by_user_id,omitempty"`
 	ProviderConfigs []TableVirtualKeyProviderConfig `gorm:"foreignKey:VirtualKeyID;constraint:OnDelete:CASCADE" json:"provider_configs"` // Empty means all providers allowed
 	MCPConfigs      []TableVirtualKeyMCPConfig      `gorm:"foreignKey:VirtualKeyID;constraint:OnDelete:CASCADE" json:"mcp_configs"`
 
@@ -213,8 +214,9 @@ type TableVirtualKey struct {
 	EncryptionStatus string `gorm:"type:varchar(20);default:'plain_text'" json:"-"`
 	ValueHash        string `gorm:"type:varchar(64);index:idx_virtual_key_value_hash,unique" json:"-"`
 
-	CreatedAt time.Time `gorm:"index;not null" json:"created_at"`
-	UpdatedAt time.Time `gorm:"index;not null" json:"updated_at"`
+	CreatedAt time.Time      `gorm:"index;not null" json:"created_at"`
+	UpdatedAt time.Time      `gorm:"index;not null" json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // TableName sets the table name for each model

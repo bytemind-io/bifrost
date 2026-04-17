@@ -63,12 +63,24 @@ func TestRoleStore_DeveloperPermissions(t *testing.T) {
 	db := setupRoleTestDB(t)
 	store, _ := NewRoleStore(db)
 
-	// Developer can CRUD VirtualKeys
+	// Developer can manage non-destructive VK operations
 	if !store.IsAllowed("Developer", ResourceVirtualKeys, OpView) {
 		t.Error("Developer should be able to view VirtualKeys")
 	}
 	if !store.IsAllowed("Developer", ResourceVirtualKeys, OpCreate) {
 		t.Error("Developer should be able to create VirtualKeys")
+	}
+	if !store.IsAllowed("Developer", ResourceVirtualKeys, OpUpdate) {
+		t.Error("Developer should be able to update VirtualKeys")
+	}
+	if store.IsAllowed("Developer", ResourceVirtualKeys, OpDelete) {
+		t.Error("Developer should NOT be able to delete VirtualKeys")
+	}
+	if store.IsAllowed("Developer", ResourceTeams, OpDelete) {
+		t.Error("Developer should NOT be able to delete Teams")
+	}
+	if store.IsAllowed("Developer", ResourceCustomers, OpDelete) {
+		t.Error("Developer should NOT be able to delete Customers")
 	}
 
 	// Developer can only view Logs
@@ -583,21 +595,18 @@ func TestDeveloperRole_AllGovernanceRoutes(t *testing.T) {
 	allowed := []struct {
 		method, path string
 	}{
-		// VKs - full CRUD
+		// VKs - no delete
 		{"GET", "/api/governance/virtual-keys"},
 		{"POST", "/api/governance/virtual-keys"},
 		{"PUT", "/api/governance/virtual-keys/123"},
-		{"DELETE", "/api/governance/virtual-keys/123"},
-		// Teams - full CRUD
+		// Teams - no delete
 		{"GET", "/api/governance/teams"},
 		{"POST", "/api/governance/teams"},
 		{"PUT", "/api/governance/teams/123"},
-		{"DELETE", "/api/governance/teams/123"},
-		// Customers - full CRUD
+		// Customers - no delete
 		{"GET", "/api/governance/customers"},
 		{"POST", "/api/governance/customers"},
 		{"PUT", "/api/governance/customers/123"},
-		{"DELETE", "/api/governance/customers/123"},
 		// Users - view only
 		{"GET", "/api/enterprise/users"},
 		// RBAC - view only
@@ -620,6 +629,10 @@ func TestDeveloperRole_AllGovernanceRoutes(t *testing.T) {
 		// RBAC - no create/update/delete
 		{"POST", "/api/roles"},
 		{"DELETE", "/api/roles/123"},
+		// Governance destructive deletes are blocked
+		{"DELETE", "/api/governance/virtual-keys/123"},
+		{"DELETE", "/api/governance/teams/123"},
+		{"DELETE", "/api/governance/customers/123"},
 		// Audit logs - no delete
 		{"DELETE", "/api/logs"},
 	}
