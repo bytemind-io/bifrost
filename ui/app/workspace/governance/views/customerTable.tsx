@@ -138,8 +138,8 @@ export default function CustomersTable({ customers, totalCount, teams, virtualKe
 						</div>
 					</div>
 
-					<div className="rounded-sm border overflow-hidden" data-testid="customer-table-container">
-						<Table>
+					<div className="rounded-sm border overflow-x-auto" data-testid="customer-table-container">
+						<Table className="min-w-[1100px]">
 							<TableHeader>
 								<TableRow>
 									<TableHead>Name</TableHead>

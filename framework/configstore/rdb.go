@@ -1571,6 +1571,25 @@ func (s *RDBConfigStore) GetVirtualKeysPaginated(ctx context.Context, params Vir
 	} else if params.TeamID != "" {
 		baseQuery = baseQuery.Where("team_id = ?", params.TeamID)
 	}
+	if params.OwnerID != "" || params.ScopeTeamID != "" || params.ScopeCustomerID != "" {
+		var clauses []string
+		var args []interface{}
+		if params.OwnerID != "" {
+			clauses = append(clauses, "created_by_user_id = ?")
+			args = append(args, params.OwnerID)
+		}
+		if params.ScopeTeamID != "" {
+			clauses = append(clauses, "team_id = ?")
+			args = append(args, params.ScopeTeamID)
+		}
+		if params.ScopeCustomerID != "" {
+			clauses = append(clauses, "customer_id = ?")
+			args = append(args, params.ScopeCustomerID)
+		}
+		if len(clauses) > 0 {
+			baseQuery = baseQuery.Where("("+strings.Join(clauses, " OR ")+")", args...)
+		}
+	}
 	if params.Search != "" {
 		search := "%" + strings.ToLower(params.Search) + "%"
 		baseQuery = baseQuery.Where("LOWER(name) LIKE ?", search)

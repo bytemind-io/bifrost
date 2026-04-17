@@ -432,6 +432,9 @@ func (h *GovernanceHandler) RegisterRoutes(r *router.Router, middlewares ...sche
 
 // matchesEnterpriseScope checks if a VK belongs to the user's team or parent customer.
 func matchesEnterpriseScope(vk *configstoreTables.TableVirtualKey, scope enterpriseScope) bool {
+	if scope.TeamID == "__no_team__" {
+		return false
+	}
 	if vk.TeamID != nil && *vk.TeamID == scope.TeamID {
 		return true
 	}
@@ -468,13 +471,28 @@ func customerMatchesScope(customerID string, scope enterpriseScope) bool {
 	return scope.CustomerID != "" && customerID != "" && customerID == scope.CustomerID
 }
 
-func (h *GovernanceHandler) canManageVirtualKey(ctx *fasthttp.RequestCtx, vk *configstoreTables.TableVirtualKey) bool {
+func (h *GovernanceHandler) canAccessVirtualKey(ctx *fasthttp.RequestCtx, vk *configstoreTables.TableVirtualKey) bool {
+	if vk == nil {
+		return false
+	}
 	if isPrivilegedGovernanceRequest(ctx) {
 		return true
 	}
 
 	userID, _, _, _ := enterprise.ExtractUserFromContext(ctx)
-	return ownerMatches(vk.CreatedByUserID, userID)
+	if ownerMatches(vk.CreatedByUserID, userID) {
+		return true
+	}
+
+	scope, shouldFilter := getEnterpriseScope(ctx, h.configStore)
+	if !shouldFilter {
+		return true
+	}
+	return matchesEnterpriseScope(vk, scope)
+}
+
+func (h *GovernanceHandler) canManageVirtualKey(ctx *fasthttp.RequestCtx, vk *configstoreTables.TableVirtualKey) bool {
+	return h.canAccessVirtualKey(ctx, vk)
 }
 
 func (h *GovernanceHandler) canManageTeam(ctx *fasthttp.RequestCtx, team *configstoreTables.TableTeam) bool {
@@ -511,7 +529,7 @@ func (h *GovernanceHandler) getVirtualKeys(ctx *fasthttp.RequestCtx) {
 		// Convert map to slice to match the non-memory response format (array)
 		virtualKeys := make([]*configstoreTables.TableVirtualKey, 0, len(data.VirtualKeys))
 		for _, vk := range data.VirtualKeys {
-			if shouldFilter && !matchesEnterpriseScope(vk, scope) {
+			if shouldFilter && !h.canAccessVirtualKey(ctx, vk) {
 				continue
 			}
 			virtualKeys = append(virtualKeys, vk)
@@ -540,9 +558,15 @@ func (h *GovernanceHandler) getVirtualKeys(ctx *fasthttp.RequestCtx) {
 
 	// Enterprise data-level filtering: non-admin users see only their team's + parent customer's VKs
 	if shouldFilter {
-		teamID = scope.TeamID
-		if scope.CustomerID != "" {
-			customerID = scope.CustomerID
+		if scope.TeamID == "__no_team__" {
+			SendJSON(ctx, map[string]interface{}{
+				"virtual_keys": []interface{}{},
+				"count":        0,
+				"total_count":  0,
+				"limit":        0,
+				"offset":       0,
+			})
+			return
 		}
 	}
 
@@ -555,6 +579,12 @@ func (h *GovernanceHandler) getVirtualKeys(ctx *fasthttp.RequestCtx) {
 			SortBy:     sortBy,
 			Order:      order,
 			Export:     isExport,
+		}
+		if shouldFilter {
+			userID, _, _, _ := enterprise.ExtractUserFromContext(ctx)
+			params.OwnerID = userID
+			params.ScopeTeamID = scope.TeamID
+			params.ScopeCustomerID = scope.CustomerID
 		}
 		if limitStr != "" {
 			n, err := strconv.Atoi(limitStr)
@@ -601,6 +631,12 @@ func (h *GovernanceHandler) getVirtualKeys(ctx *fasthttp.RequestCtx) {
 	// Non-paginated path: if team-scoped, use paginated path with team filter
 	if teamID != "" {
 		params := configstore.VirtualKeyQueryParams{TeamID: teamID, Limit: 10000}
+		if shouldFilter {
+			userID, _, _, _ := enterprise.ExtractUserFromContext(ctx)
+			params.OwnerID = userID
+			params.ScopeTeamID = scope.TeamID
+			params.ScopeCustomerID = scope.CustomerID
+		}
 		virtualKeys, totalCount, err := h.configStore.GetVirtualKeysPaginated(ctx, params)
 		if err != nil {
 			logger.Error("failed to retrieve virtual keys: %v", err)
@@ -622,6 +658,15 @@ func (h *GovernanceHandler) getVirtualKeys(ctx *fasthttp.RequestCtx) {
 		logger.Error("failed to retrieve virtual keys: %v", err)
 		SendError(ctx, 500, "Failed to retrieve virtual keys")
 		return
+	}
+	if shouldFilter {
+		filtered := make([]configstoreTables.TableVirtualKey, 0, len(virtualKeys))
+		for _, vk := range virtualKeys {
+			if h.canAccessVirtualKey(ctx, &vk) {
+				filtered = append(filtered, vk)
+			}
+		}
+		virtualKeys = filtered
 	}
 	SendJSON(ctx, map[string]interface{}{
 		"virtual_keys": virtualKeys,
@@ -645,9 +690,22 @@ func (h *GovernanceHandler) createVirtualKey(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	// Enterprise: Team role users auto-assign their team_id
-	if scopeTeamID, shouldFilter := getEnterpriseTeamScope(ctx); shouldFilter && scopeTeamID != "__no_team__" {
-		req.TeamID = &scopeTeamID
-		req.CustomerID = nil
+	if scope, shouldFilter := getEnterpriseScope(ctx, h.configStore); shouldFilter {
+		if scope.TeamID == "__no_team__" {
+			SendError(ctx, 403, "Forbidden")
+			return
+		}
+		if req.TeamID != nil && *req.TeamID != "" && *req.TeamID != scope.TeamID {
+			SendError(ctx, 403, "Forbidden")
+			return
+		}
+		if req.CustomerID != nil && *req.CustomerID != "" && !customerMatchesScope(*req.CustomerID, scope) {
+			SendError(ctx, 403, "Forbidden")
+			return
+		}
+		if req.TeamID == nil && req.CustomerID == nil {
+			req.TeamID = &scope.TeamID
+		}
 	}
 	// Validate mutually exclusive TeamID and CustomerID
 	if req.TeamID != nil && req.CustomerID != nil {
@@ -859,6 +917,10 @@ func (h *GovernanceHandler) getVirtualKey(ctx *fasthttp.RequestCtx) {
 		}
 		for _, vk := range data.VirtualKeys {
 			if vk.ID == vkID {
+				if !h.canAccessVirtualKey(ctx, vk) {
+					SendError(ctx, 403, "Forbidden")
+					return
+				}
 				SendJSON(ctx, map[string]interface{}{
 					"virtual_key": vk,
 				})
@@ -875,6 +937,10 @@ func (h *GovernanceHandler) getVirtualKey(ctx *fasthttp.RequestCtx) {
 			return
 		}
 		SendError(ctx, 500, "Failed to retrieve virtual key")
+		return
+	}
+	if !h.canAccessVirtualKey(ctx, vk) {
+		SendError(ctx, 403, "Forbidden")
 		return
 	}
 
@@ -909,6 +975,20 @@ func (h *GovernanceHandler) updateVirtualKey(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, 403, "Forbidden")
 		return
 	}
+	if scope, shouldFilter := getEnterpriseScope(ctx, h.configStore); shouldFilter {
+		if scope.TeamID == "__no_team__" {
+			SendError(ctx, 403, "Forbidden")
+			return
+		}
+		if req.TeamID != nil && *req.TeamID != "" && *req.TeamID != scope.TeamID {
+			SendError(ctx, 403, "Forbidden")
+			return
+		}
+		if req.CustomerID != nil && *req.CustomerID != "" && !customerMatchesScope(*req.CustomerID, scope) {
+			SendError(ctx, 403, "Forbidden")
+			return
+		}
+	}
 	if err := h.configStore.ExecuteTransaction(ctx, func(tx *gorm.DB) error {
 		var budgetIDToDelete, rateLimitIDToDelete string
 		var providerBudgetIDsToDelete, providerRateLimitIDsToDelete []string
@@ -927,11 +1007,6 @@ func (h *GovernanceHandler) updateVirtualKey(ctx *fasthttp.RequestCtx) {
 		if req.CustomerID != nil {
 			vk.CustomerID = req.CustomerID
 			vk.TeamID = nil // Clear TeamID if setting CustomerID
-		}
-		// When both TeamID and CustomerID are nil
-		if req.TeamID == nil && req.CustomerID == nil {
-			vk.TeamID = nil
-			vk.CustomerID = nil
 		}
 		if req.IsActive != nil {
 			vk.IsActive = *req.IsActive

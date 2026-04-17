@@ -303,8 +303,8 @@ export default function TeamsTable({ teams, totalCount, customers, virtualKeys, 
 						</div>
 					</div>
 
-					<div className="rounded-sm border overflow-hidden" data-testid="teams-table">
-						<Table>
+					<div className="rounded-sm border overflow-x-auto" data-testid="teams-table">
+						<Table className="min-w-[1180px]">
 							<TableHeader>
 								<TableRow>
 									<TableHead>Name</TableHead>

@@ -534,6 +534,57 @@ func TestGovernanceWriteAccess_VirtualKey(t *testing.T) {
 	}
 }
 
+func TestGovernanceAccess_VirtualKeyScope(t *testing.T) {
+	h := &GovernanceHandler{}
+
+	adminCtx := &fasthttp.RequestCtx{}
+	adminCtx.SetUserValue(enterprise.CtxKeyUserRole, "Admin")
+	if !h.canAccessVirtualKey(adminCtx, &configstoreTables.TableVirtualKey{}) {
+		t.Fatal("admin should access any virtual key")
+	}
+
+	userID := "user-1"
+	teamID := "team-1"
+	customerID := "customer-1"
+
+	userCtx := &fasthttp.RequestCtx{}
+	userCtx.SetUserValue(enterprise.CtxKeyUserRole, "Viewer")
+	userCtx.SetUserValue(enterprise.CtxKeyUserID, userID)
+	userCtx.SetUserValue(enterprise.CtxKeyUserTeamID, &teamID)
+
+	if !h.canAccessVirtualKey(userCtx, &configstoreTables.TableVirtualKey{CreatedByUserID: &userID}) {
+		t.Fatal("creator should access owned virtual key")
+	}
+
+	if !h.canAccessVirtualKey(userCtx, &configstoreTables.TableVirtualKey{TeamID: &teamID}) {
+		t.Fatal("user should access team-scoped virtual key")
+	}
+
+	h.configStore = &mockConfigStoreScope{
+		team: &configstoreTables.TableTeam{ID: teamID, CustomerID: &customerID},
+	}
+	if !h.canAccessVirtualKey(userCtx, &configstoreTables.TableVirtualKey{CustomerID: &customerID}) {
+		t.Fatal("user should access customer-scoped virtual key in parent customer")
+	}
+
+	otherTeamID := "team-2"
+	if h.canAccessVirtualKey(userCtx, &configstoreTables.TableVirtualKey{TeamID: &otherTeamID}) {
+		t.Fatal("user should not access other team's virtual key")
+	}
+}
+
+type mockConfigStoreScope struct {
+	configstore.ConfigStore
+	team *configstoreTables.TableTeam
+}
+
+func (m *mockConfigStoreScope) GetTeam(_ context.Context, id string) (*configstoreTables.TableTeam, error) {
+	if m.team != nil && m.team.ID == id {
+		return m.team, nil
+	}
+	return nil, configstore.ErrNotFound
+}
+
 func TestGovernanceWriteAccess_TeamAndCustomer(t *testing.T) {
 	h := &GovernanceHandler{}
 
