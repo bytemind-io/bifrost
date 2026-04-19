@@ -416,6 +416,14 @@ func (h *EnterpriseHandler) logout(ctx *fasthttp.RequestCtx) {
 func (h *EnterpriseHandler) getMe(ctx *fasthttp.RequestCtx) {
 	userID, _, role, teamID := enterprise.ExtractUserFromContext(ctx)
 	if userID == "" {
+		// Distinguish legacy admin session (role set to "Admin" by resolveUser)
+		// from truly unauthenticated requests (role == ""). Previously both fell
+		// into the legacy-admin branch, leaking Admin permissions to anonymous
+		// callers who then rendered admin UI based on this response.
+		if !strings.EqualFold(role, "Admin") {
+			SendError(ctx, fasthttp.StatusUnauthorized, "Not authenticated")
+			return
+		}
 		// Legacy admin session
 		SendJSON(ctx, map[string]interface{}{
 			"user":        nil,
