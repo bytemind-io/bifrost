@@ -2692,9 +2692,18 @@ func (s *RDBConfigStore) DeleteTeam(ctx context.Context, id string) error {
 			}
 			return err
 		}
-		// Set team_id to null for all virtual keys associated with the team
-		if err := tx.WithContext(ctx).Model(&tables.TableVirtualKey{}).Where("team_id = ?", id).Update("team_id", nil).Error; err != nil {
+		// Refuse if the team still has virtual keys attached. Detaching silently
+		// (setting team_id to NULL) would leave the VKs ownerless and break
+		// tenant-scoped billing/audit. Mirrors DeleteCustomer behavior.
+		var vkCount int64
+		if err := tx.WithContext(ctx).Model(&tables.TableVirtualKey{}).Where("team_id = ?", id).Count(&vkCount).Error; err != nil {
 			return err
+		}
+		if vkCount > 0 {
+			return &ErrHasDependents{
+				Resource:    "team",
+				VirtualKeys: int(vkCount),
+			}
 		}
 		// Store the budget and rate limit IDs before deleting the team
 		budgetID := team.BudgetID

@@ -477,6 +477,41 @@ func (h *EnterpriseHandler) updateMe(ctx *fasthttp.RequestCtx) {
 	SendJSON(ctx, user)
 }
 
+func (h *EnterpriseHandler) isAdmin(ctx *fasthttp.RequestCtx) bool {
+	_, _, role, _ := enterprise.ExtractUserFromContext(ctx)
+	return strings.EqualFold(role, "Admin")
+}
+
+// Non-admin enterprise users are scoped to their own team. Self-access is always allowed.
+func (h *EnterpriseHandler) canAccessUser(ctx *fasthttp.RequestCtx, target *enterprise.TableUser) bool {
+	if target == nil {
+		return false
+	}
+	if h.isAdmin(ctx) {
+		return true
+	}
+
+	callerID, _, _, callerTeamID := enterprise.ExtractUserFromContext(ctx)
+	if callerID == "" {
+		return false
+	}
+	if target.ID == callerID {
+		return true
+	}
+	if callerTeamID == nil || *callerTeamID == "" {
+		return false
+	}
+	return target.TeamID != nil && *target.TeamID == *callerTeamID
+}
+
+func (h *EnterpriseHandler) canManageTeamMembers(ctx *fasthttp.RequestCtx, teamID string) bool {
+	if h.isAdmin(ctx) {
+		return true
+	}
+	_, _, _, callerTeamID := enterprise.ExtractUserFromContext(ctx)
+	return callerTeamID != nil && *callerTeamID != "" && *callerTeamID == teamID
+}
+
 // =====================
 // User CRUD
 // =====================
@@ -537,6 +572,10 @@ func (h *EnterpriseHandler) getUser(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusNotFound, "User not found")
 		return
 	}
+	if !h.canAccessUser(ctx, user) {
+		SendError(ctx, fasthttp.StatusForbidden, "Forbidden")
+		return
+	}
 	SendJSON(ctx, user)
 }
 
@@ -554,9 +593,9 @@ func (h *EnterpriseHandler) listUsers(ctx *fasthttp.RequestCtx) {
 		params.IsActive = &isActive
 	}
 
-	// Scope by team for non-admin users
-	_, _, role, teamID := enterprise.ExtractUserFromContext(ctx)
-	if role == "Developer" {
+	// Scope by team for all non-admin users
+	if !h.isAdmin(ctx) {
+		_, _, _, teamID := enterprise.ExtractUserFromContext(ctx)
 		params.TeamID = teamID
 	}
 
@@ -583,6 +622,15 @@ func (h *EnterpriseHandler) updateUser(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
 		return
 	}
+	targetUser, err := h.userStore.GetUser(ctx, userID)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusNotFound, "User not found")
+		return
+	}
+	if !h.canAccessUser(ctx, targetUser) {
+		SendError(ctx, fasthttp.StatusForbidden, "Forbidden")
+		return
+	}
 
 	// Handle password reset: admin only
 	if newPassword, ok := body["password"].(string); ok && newPassword != "" {
@@ -603,6 +651,11 @@ func (h *EnterpriseHandler) updateUser(ctx *fasthttp.RequestCtx) {
 
 	delete(body, "password")
 	delete(body, "id")
+	if !h.isAdmin(ctx) {
+		delete(body, "role")
+		delete(body, "team_id")
+		delete(body, "is_active")
+	}
 
 	user, err := h.userStore.UpdateUser(ctx, userID, body)
 	if err != nil {
@@ -619,6 +672,15 @@ func (h *EnterpriseHandler) deleteUser(ctx *fasthttp.RequestCtx) {
 	userID, ok := ctx.UserValue("user_id").(string)
 	if !ok {
 		SendError(ctx, fasthttp.StatusBadRequest, "Invalid user ID")
+		return
+	}
+	targetUser, err := h.userStore.GetUser(ctx, userID)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusNotFound, "User not found")
+		return
+	}
+	if !h.canAccessUser(ctx, targetUser) {
+		SendError(ctx, fasthttp.StatusForbidden, "Forbidden")
 		return
 	}
 	if err := h.userStore.DeleteUser(ctx, userID); err != nil {
@@ -641,6 +703,10 @@ func (h *EnterpriseHandler) listTeamMembers(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusBadRequest, "Invalid team ID")
 		return
 	}
+	if !h.canManageTeamMembers(ctx, teamID) {
+		SendError(ctx, fasthttp.StatusForbidden, "Forbidden")
+		return
+	}
 
 	users, err := h.userStore.ListUsersByTeam(ctx, teamID)
 	if err != nil {
@@ -660,6 +726,10 @@ func (h *EnterpriseHandler) assignTeamMember(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusBadRequest, "Invalid team ID")
 		return
 	}
+	if !h.canManageTeamMembers(ctx, teamID) {
+		SendError(ctx, fasthttp.StatusForbidden, "Forbidden")
+		return
+	}
 
 	payload := struct {
 		UserID string `json:"user_id"`
@@ -670,6 +740,15 @@ func (h *EnterpriseHandler) assignTeamMember(ctx *fasthttp.RequestCtx) {
 	}
 	if payload.UserID == "" {
 		SendError(ctx, fasthttp.StatusBadRequest, "user_id is required")
+		return
+	}
+	targetUser, err := h.userStore.GetUser(ctx, payload.UserID)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusNotFound, "User not found")
+		return
+	}
+	if !h.isAdmin(ctx) && targetUser.TeamID != nil && *targetUser.TeamID != teamID {
+		SendError(ctx, fasthttp.StatusForbidden, "Forbidden")
 		return
 	}
 
@@ -689,9 +768,22 @@ func (h *EnterpriseHandler) removeTeamMember(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusBadRequest, "Invalid team ID")
 		return
 	}
+	if !h.canManageTeamMembers(ctx, teamID) {
+		SendError(ctx, fasthttp.StatusForbidden, "Forbidden")
+		return
+	}
 	userID, ok := ctx.UserValue("user_id").(string)
 	if !ok {
 		SendError(ctx, fasthttp.StatusBadRequest, "Invalid user ID")
+		return
+	}
+	targetUser, err := h.userStore.GetUser(ctx, userID)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusNotFound, "User not found")
+		return
+	}
+	if !h.isAdmin(ctx) && (targetUser.TeamID == nil || *targetUser.TeamID != teamID) {
+		SendError(ctx, fasthttp.StatusForbidden, "Forbidden")
 		return
 	}
 

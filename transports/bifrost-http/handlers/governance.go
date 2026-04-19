@@ -521,6 +521,26 @@ func (h *GovernanceHandler) canManageTeam(ctx *fasthttp.RequestCtx, team *config
 	return ownerMatches(team.CreatedByUserID, userID)
 }
 
+func (h *GovernanceHandler) canAccessTeam(ctx *fasthttp.RequestCtx, team *configstoreTables.TableTeam) bool {
+	if team == nil {
+		return false
+	}
+	if isPrivilegedGovernanceRequest(ctx) {
+		return true
+	}
+	scope, shouldFilter := getEnterpriseScope(ctx, h.configStore)
+	if !shouldFilter {
+		return true
+	}
+	if scope.TeamID == "__no_team__" {
+		return false
+	}
+	if team.ID == scope.TeamID {
+		return true
+	}
+	return team.CustomerID != nil && customerMatchesScope(*team.CustomerID, scope)
+}
+
 func (h *GovernanceHandler) canManageCustomer(ctx *fasthttp.RequestCtx, customer *configstoreTables.TableCustomer) bool {
 	if isPrivilegedGovernanceRequest(ctx) {
 		return true
@@ -528,6 +548,30 @@ func (h *GovernanceHandler) canManageCustomer(ctx *fasthttp.RequestCtx, customer
 
 	userID, _, _, _ := enterprise.ExtractUserFromContext(ctx)
 	return ownerMatches(customer.CreatedByUserID, userID)
+}
+
+func (h *GovernanceHandler) canAccessCustomer(ctx *fasthttp.RequestCtx, customer *configstoreTables.TableCustomer) bool {
+	if customer == nil {
+		return false
+	}
+	if isPrivilegedGovernanceRequest(ctx) {
+		return true
+	}
+	scope, shouldFilter := getEnterpriseScope(ctx, h.configStore)
+	if !shouldFilter {
+		return true
+	}
+	if scope.TeamID == "__no_team__" {
+		return false
+	}
+	return customerMatchesScope(customer.ID, scope)
+}
+
+func normalizeAllowedModelsForVKProviderConfig(allowedModels schemas.WhiteList) schemas.WhiteList {
+	if allowedModels == nil {
+		return schemas.WhiteList{"*"}
+	}
+	return allowedModels
 }
 
 // getVirtualKeys handles GET /api/governance/virtual-keys - Get all virtual keys with relationships
@@ -827,7 +871,8 @@ func (h *GovernanceHandler) createVirtualKey(ctx *fasthttp.RequestCtx) {
 				if _, ok := providerSet[providerName]; !ok {
 					return &badRequestError{err: fmt.Errorf("invalid provider name: %s", pc.Provider)}
 				}
-				if err := pc.AllowedModels.Validate(); err != nil {
+				allowedModels := normalizeAllowedModelsForVKProviderConfig(pc.AllowedModels)
+				if err := allowedModels.Validate(); err != nil {
 					return &badRequestError{err: fmt.Errorf("invalid allowed_models for provider %s: %w", pc.Provider, err)}
 				}
 				if err := pc.KeyIDs.Validate(); err != nil {
@@ -854,7 +899,7 @@ func (h *GovernanceHandler) createVirtualKey(ctx *fasthttp.RequestCtx) {
 					VirtualKeyID:  vk.ID,
 					Provider:      string(providerName),
 					Weight:        pc.Weight,
-					AllowedModels: pc.AllowedModels,
+					AllowedModels: allowedModels,
 					AllowAllKeys:  allowAllKeys,
 					Keys:          keys,
 				}
@@ -1227,7 +1272,8 @@ func (h *GovernanceHandler) updateVirtualKey(ctx *fasthttp.RequestCtx) {
 					return &badRequestError{err: fmt.Errorf("invalid provider name: %s", pc.Provider)}
 				}
 				if pc.ID == nil {
-					if err := pc.AllowedModels.Validate(); err != nil {
+					allowedModels := normalizeAllowedModelsForVKProviderConfig(pc.AllowedModels)
+					if err := allowedModels.Validate(); err != nil {
 						return &badRequestError{err: fmt.Errorf("invalid allowed_models for provider %s: %w", pc.Provider, err)}
 					}
 					if err := pc.KeyIDs.Validate(); err != nil {
@@ -1255,7 +1301,7 @@ func (h *GovernanceHandler) updateVirtualKey(ctx *fasthttp.RequestCtx) {
 						VirtualKeyID:  vk.ID,
 						Provider:      string(providerName),
 						Weight:        pc.Weight,
-						AllowedModels: pc.AllowedModels,
+						AllowedModels: allowedModels,
 						AllowAllKeys:  allowAllKeys,
 						Keys:          keys,
 					}
@@ -1312,7 +1358,8 @@ func (h *GovernanceHandler) updateVirtualKey(ctx *fasthttp.RequestCtx) {
 						return fmt.Errorf("provider config %d does not belong to this virtual key", *pc.ID)
 					}
 					requestConfigsMap[*pc.ID] = true
-					if err := pc.AllowedModels.Validate(); err != nil {
+					allowedModels := normalizeAllowedModelsForVKProviderConfig(pc.AllowedModels)
+					if err := allowedModels.Validate(); err != nil {
 						return &badRequestError{err: fmt.Errorf("invalid allowed_models for provider %s: %w", pc.Provider, err)}
 					}
 					if err := pc.KeyIDs.Validate(); err != nil {
@@ -1320,7 +1367,7 @@ func (h *GovernanceHandler) updateVirtualKey(ctx *fasthttp.RequestCtx) {
 					}
 					existing.Provider = string(providerName)
 					existing.Weight = pc.Weight
-					existing.AllowedModels = pc.AllowedModels
+					existing.AllowedModels = allowedModels
 
 					// Get keys for this provider config if specified
 					var keys []configstoreTables.TableKey
@@ -1856,6 +1903,10 @@ func (h *GovernanceHandler) getTeam(ctx *fasthttp.RequestCtx) {
 			SendError(ctx, 404, "Team not found")
 			return
 		}
+		if !h.canAccessTeam(ctx, team) {
+			SendError(ctx, 403, "Forbidden")
+			return
+		}
 		SendJSON(ctx, map[string]interface{}{
 			"team": team,
 		})
@@ -1868,6 +1919,10 @@ func (h *GovernanceHandler) getTeam(ctx *fasthttp.RequestCtx) {
 			return
 		}
 		SendError(ctx, 500, "Failed to retrieve team")
+		return
+	}
+	if !h.canAccessTeam(ctx, team) {
+		SendError(ctx, 403, "Forbidden")
 		return
 	}
 	h.attachHistoricalUsageToTeam(ctx, team)
@@ -2082,6 +2137,12 @@ func (h *GovernanceHandler) deleteTeam(ctx *fasthttp.RequestCtx) {
 			SendError(ctx, 404, "Team not found")
 			return
 		}
+		var depErr *configstore.ErrHasDependents
+		if errors.As(err, &depErr) {
+			SendError(ctx, fasthttp.StatusConflict, depErr.Error())
+			return
+		}
+		logger.Error("failed to delete team %s: %v", teamID, err)
 		SendError(ctx, 500, "Failed to delete team")
 		return
 	}
@@ -2297,6 +2358,10 @@ func (h *GovernanceHandler) getCustomer(ctx *fasthttp.RequestCtx) {
 			SendError(ctx, 404, "Customer not found")
 			return
 		}
+		if !h.canAccessCustomer(ctx, customer) {
+			SendError(ctx, 403, "Forbidden")
+			return
+		}
 		SendJSON(ctx, map[string]interface{}{
 			"customer": customer,
 		})
@@ -2309,6 +2374,10 @@ func (h *GovernanceHandler) getCustomer(ctx *fasthttp.RequestCtx) {
 			return
 		}
 		SendError(ctx, 500, "Failed to retrieve customer")
+		return
+	}
+	if !h.canAccessCustomer(ctx, customer) {
+		SendError(ctx, 403, "Forbidden")
 		return
 	}
 	SendJSON(ctx, map[string]interface{}{

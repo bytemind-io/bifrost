@@ -67,7 +67,7 @@ help: ## Show this help message
 
 cleanup-enterprise: ## Clean up enterprise directories if present
 	@$(ECHO) "$(GREEN)Cleaning up enterprise...$(NC)"
-	@if [ -d "ui/app/enterprise" ]; then rm -rf ui/app/enterprise; fi
+	@if [ "$(OPEN_SOURCE)" = "1" ] && [ -d "ui/app/enterprise" ]; then rm -rf ui/app/enterprise; fi
 	@$(ECHO) "$(GREEN)Enterprise cleaned up$(NC)"
 
 install-ui: cleanup-enterprise

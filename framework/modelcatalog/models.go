@@ -426,7 +426,7 @@ func (mc *ModelCatalog) UpsertUnfilteredModelDataForProvider(provider schemas.Mo
 func (mc *ModelCatalog) RefineModelForProvider(provider schemas.ModelProvider, model string) (string, error) {
 	switch provider {
 	case schemas.Groq:
-		if strings.Contains(model, "gpt-") {
+		if strings.HasPrefix(model, "gpt-") {
 			return "openai/" + model, nil
 		}
 		return mc.refineNestedProviderModel(provider, model)

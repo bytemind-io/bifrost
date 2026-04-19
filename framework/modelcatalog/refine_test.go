@@ -49,3 +49,13 @@ func TestRefineModelForProvider_ReplicateReturnsAmbiguousMatchError(t *testing.T
 	assert.Empty(t, refined)
 	assert.Contains(t, err.Error(), "multiple compatible models found")
 }
+
+func TestRefineModelForProvider_GroqPrefixesGPTFamilyModels(t *testing.T) {
+	mc := newTestCatalog(map[schemas.ModelProvider][]string{
+		schemas.Groq: {"openai/gpt-5.4"},
+	}, nil)
+
+	refined, err := mc.RefineModelForProvider(schemas.Groq, "gpt-5.4")
+	require.NoError(t, err)
+	assert.Equal(t, "openai/gpt-5.4", refined)
+}

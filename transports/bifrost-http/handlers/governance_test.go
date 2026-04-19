@@ -607,3 +607,54 @@ func TestGovernanceWriteAccess_TeamAndCustomer(t *testing.T) {
 		t.Fatal("non-owner should not manage customer without matching creator")
 	}
 }
+
+func TestGovernanceAccess_TeamAndCustomerScope(t *testing.T) {
+	h := &GovernanceHandler{
+		configStore: &mockConfigStoreScope{
+			team: &configstoreTables.TableTeam{ID: "team-1", CustomerID: bifrostString("customer-1")},
+		},
+	}
+
+	adminCtx := &fasthttp.RequestCtx{}
+	adminCtx.SetUserValue(enterprise.CtxKeyUserRole, "Admin")
+	if !h.canAccessTeam(adminCtx, &configstoreTables.TableTeam{ID: "team-x"}) {
+		t.Fatal("admin should access any team")
+	}
+	if !h.canAccessCustomer(adminCtx, &configstoreTables.TableCustomer{ID: "customer-x"}) {
+		t.Fatal("admin should access any customer")
+	}
+
+	userCtx := &fasthttp.RequestCtx{}
+	userCtx.SetUserValue(enterprise.CtxKeyUserRole, "Viewer")
+	userCtx.SetUserValue(enterprise.CtxKeyUserTeamID, bifrostString("team-1"))
+
+	if !h.canAccessTeam(userCtx, &configstoreTables.TableTeam{ID: "team-1"}) {
+		t.Fatal("user should access own team")
+	}
+	if !h.canAccessTeam(userCtx, &configstoreTables.TableTeam{ID: "team-2", CustomerID: bifrostString("customer-1")}) {
+		t.Fatal("user should access sibling team inside same customer scope")
+	}
+	if h.canAccessTeam(userCtx, &configstoreTables.TableTeam{ID: "team-3", CustomerID: bifrostString("customer-2")}) {
+		t.Fatal("user should not access team outside scoped customer")
+	}
+
+	if !h.canAccessCustomer(userCtx, &configstoreTables.TableCustomer{ID: "customer-1"}) {
+		t.Fatal("user should access parent customer")
+	}
+	if h.canAccessCustomer(userCtx, &configstoreTables.TableCustomer{ID: "customer-2"}) {
+		t.Fatal("user should not access other customer")
+	}
+}
+
+func TestNormalizeAllowedModelsForVKProviderConfig(t *testing.T) {
+	got := normalizeAllowedModelsForVKProviderConfig(nil)
+	if len(got) != 1 || got[0] != "*" {
+		t.Fatalf("nil allowed_models should normalize to [*], got %#v", got)
+	}
+
+	explicitEmpty := schemas.WhiteList{}
+	got = normalizeAllowedModelsForVKProviderConfig(explicitEmpty)
+	if !got.IsEmpty() {
+		t.Fatalf("explicit empty allowed_models should remain deny-all, got %#v", got)
+	}
+}
