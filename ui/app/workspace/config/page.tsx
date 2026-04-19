@@ -1,30 +1,21 @@
-"use client";
-
-import FullPageLoader from "@/components/fullPageLoader";
 import { NoPermissionView } from "@/components/noPermissionView";
-import { getWorkspaceSectionLandingPath } from "@/lib/utils/workspaceLanding";
-import { useRbacContext } from "@enterprise/lib";
-import { useRouter } from "next/navigation";
+import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
+import { useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 
 export default function ConfigPage() {
-	const router = useRouter();
-	const { permissions, loaded, role } = useRbacContext();
-	const targetRoute = getWorkspaceSectionLandingPath("config", permissions, role);
+	const navigate = useNavigate();
+	// Check permission
+	const hasConfigAccess = useRbac(RbacResource.Settings, RbacOperation.View);
 
 	useEffect(() => {
-		if (loaded && targetRoute) {
-			router.replace(targetRoute);
+		if (hasConfigAccess) {
+			navigate({ to: "/workspace/config/client-settings", replace: true });
 		}
-	}, [loaded, router, targetRoute]);
+	}, [hasConfigAccess, navigate]);
 
-	if (!loaded) {
-		return <FullPageLoader />;
-	}
-
-	if (!targetRoute) {
+	if (!hasConfigAccess) {
 		return <NoPermissionView entity="configuration" />;
 	}
-
-	return <FullPageLoader />;
+	return null;
 }

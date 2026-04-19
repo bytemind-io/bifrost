@@ -85,7 +85,7 @@ func TestToAnthropicChatRequest_CachingDeterminism(t *testing.T) {
 			Model:    "claude-sonnet-4-20250514",
 			Input: []schemas.ChatMessage{{
 				Role:    schemas.ChatMessageRoleUser,
-				Content: &schemas.ChatMessageContent{ContentStr: schemas.Ptr("test")},
+				Content: &schemas.ChatMessageContent{ContentStr: new("test")},
 			}},
 			Params: &schemas.ChatParameters{
 				Tools: []schemas.ChatTool{{
@@ -337,6 +337,115 @@ func TestToAnthropicChatRequest_ToolInputKeyOrderPreservation(t *testing.T) {
 	}
 }
 
+func TestToBifrostChatResponse_MultipleTextBlocksWithThinking(t *testing.T) {
+	thinkingText := "Let me reason step by step about this problem."
+	textBlock1 := "The answer is 42."
+	textBlock2 := "Here is why that is the case."
+	signature := "sig_abc123"
+
+	response := &AnthropicMessageResponse{
+		ID:    "msg_test123",
+		Type:  "message",
+		Role:  "assistant",
+		Model: "claude-opus-4-6-20250514",
+		Content: []AnthropicContentBlock{
+			{
+				Type:      AnthropicContentBlockTypeThinking,
+				Thinking:  &thinkingText,
+				Signature: &signature,
+			},
+			{
+				Type: AnthropicContentBlockTypeText,
+				Text: &textBlock1,
+			},
+			{
+				Type: AnthropicContentBlockTypeText,
+				Text: &textBlock2,
+			},
+		},
+		StopReason: "end_turn",
+		Usage: &AnthropicUsage{
+			InputTokens:  100,
+			OutputTokens: 50,
+		},
+	}
+
+	ctx, cancel := schemas.NewBifrostContextWithCancel(nil)
+	defer cancel()
+	result := response.ToBifrostChatResponse(ctx)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+
+	// Content should be a combined string, not blocks
+	choice := result.Choices[0]
+	msg := choice.ChatNonStreamResponseChoice.Message
+	if msg.Content.ContentBlocks != nil {
+		t.Error("expected ContentBlocks to be nil (combined into string)")
+	}
+	if msg.Content.ContentStr == nil {
+		t.Fatal("expected ContentStr to be non-nil")
+	}
+
+	// Combined string: thinking first, then text blocks
+	expected := thinkingText + "\n\n" + textBlock1 + "\n\n" + textBlock2
+	if *msg.Content.ContentStr != expected {
+		t.Errorf("expected combined content:\n%s\ngot:\n%s", expected, *msg.Content.ContentStr)
+	}
+
+	// Reasoning field should still have thinking text
+	if msg.ChatAssistantMessage == nil {
+		t.Fatal("expected ChatAssistantMessage to be non-nil")
+	}
+	if msg.ChatAssistantMessage.Reasoning == nil {
+		t.Fatal("expected Reasoning to be non-nil")
+	}
+
+	// ReasoningDetails should have: signature-only thinking entry + content blocks boundary
+	rd := msg.ChatAssistantMessage.ReasoningDetails
+	if len(rd) < 2 {
+		t.Fatalf("expected at least 2 reasoning details entries, got %d", len(rd))
+	}
+
+	// First entry: thinking with signature, no text (text was cleared)
+	if rd[0].Type != schemas.BifrostReasoningDetailsTypeText {
+		t.Errorf("expected first reasoning detail type %s, got %s", schemas.BifrostReasoningDetailsTypeText, rd[0].Type)
+	}
+	if rd[0].Signature == nil || *rd[0].Signature != signature {
+		t.Error("expected signature to be preserved")
+	}
+	if rd[0].Text != nil {
+		t.Error("expected thinking text to be nil (cleared to avoid duplication)")
+	}
+
+	// Last entry: content blocks boundary
+	lastRD := rd[len(rd)-1]
+	if lastRD.Type != schemas.BifrostReasoningDetailsTypeContentBlocks {
+		t.Errorf("expected last reasoning detail type %s, got %s", schemas.BifrostReasoningDetailsTypeContentBlocks, lastRD.Type)
+	}
+	if lastRD.Text == nil {
+		t.Fatal("expected content blocks metadata to be non-nil")
+	}
+
+	// var meta []contentBlockMeta
+	// if err := json.Unmarshal([]byte(*lastRD.Text), &meta); err != nil {
+	// 	t.Fatalf("failed to unmarshal block metadata: %v", err)
+	// }
+	// if len(meta) != 3 {
+	// 	t.Fatalf("expected 3 block metadata entries, got %d", len(meta))
+	// }
+	// if meta[0].T != "thinking" || meta[0].L != len(thinkingText) {
+	// 	t.Errorf("block 0: expected thinking/%d, got %s/%d", len(thinkingText), meta[0].T, meta[0].L)
+	// }
+	// if meta[1].T != "text" || meta[1].L != len(textBlock1) {
+	// 	t.Errorf("block 1: expected text/%d, got %s/%d", len(textBlock1), meta[1].T, meta[1].L)
+	// }
+	// if meta[2].T != "text" || meta[2].L != len(textBlock2) {
+	// 	t.Errorf("block 2: expected text/%d, got %s/%d", len(textBlock2), meta[2].T, meta[2].L)
+	// }
+}
+
 func TestToBifrostChatResponse_SingleTextBlockNoThinking(t *testing.T) {
 	// Verify existing behavior: single text block without thinking collapses to string
 	text := "Simple response"
@@ -509,5 +618,165 @@ func TestToAnthropicChatRequest_NormalFlowUnchanged(t *testing.T) {
 	}
 	if blocks[1].Text == nil || *blocks[1].Text != responseText {
 		t.Errorf("block 1: expected text %q, got %v", responseText, blocks[1].Text)
+	}
+}
+
+func TestToAnthropicChatRequest_Opus47_StripsTemperatureTopPTopK(t *testing.T) {
+	temp := 0.7
+	topP := 0.9
+
+	bifrostReq := &schemas.BifrostChatRequest{
+		Provider: schemas.Anthropic,
+		Model:    "claude-opus-4-7-20260401",
+		Input: []schemas.ChatMessage{
+			{Role: schemas.ChatMessageRoleUser, Content: &schemas.ChatMessageContent{ContentStr: schemas.Ptr("hi")}},
+		},
+		Params: &schemas.ChatParameters{
+			Temperature: &temp,
+			TopP:        &topP,
+			ExtraParams: map[string]interface{}{"top_k": 40},
+		},
+	}
+
+	ctx, cancel := schemas.NewBifrostContextWithCancel(nil)
+	defer cancel()
+	result, err := ToAnthropicChatRequest(ctx, bifrostReq)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Temperature != nil {
+		t.Errorf("expected Temperature to be nil for Opus 4.7, got %v", result.Temperature)
+	}
+	if result.TopP != nil {
+		t.Errorf("expected TopP to be nil for Opus 4.7, got %v", result.TopP)
+	}
+	if result.TopK != nil {
+		t.Errorf("expected TopK to be nil for Opus 4.7, got %v", result.TopK)
+	}
+}
+
+func TestToAnthropicChatRequest_NonOpus47_PreservesTemperature(t *testing.T) {
+	temp := 0.7
+
+	bifrostReq := &schemas.BifrostChatRequest{
+		Provider: schemas.Anthropic,
+		Model:    "claude-opus-4-6-20250514",
+		Input: []schemas.ChatMessage{
+			{Role: schemas.ChatMessageRoleUser, Content: &schemas.ChatMessageContent{ContentStr: schemas.Ptr("hi")}},
+		},
+		Params: &schemas.ChatParameters{
+			Temperature: &temp,
+		},
+	}
+
+	ctx, cancel := schemas.NewBifrostContextWithCancel(nil)
+	defer cancel()
+	result, err := ToAnthropicChatRequest(ctx, bifrostReq)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Temperature == nil || *result.Temperature != temp {
+		t.Errorf("expected Temperature %v, got %v", temp, result.Temperature)
+	}
+}
+
+func TestToAnthropicChatRequest_Opus47_ReasoningMaxTokens_AdaptiveOnly(t *testing.T) {
+	maxTok := 2048
+
+	bifrostReq := &schemas.BifrostChatRequest{
+		Provider: schemas.Anthropic,
+		Model:    "claude-opus-4-7-20260401",
+		Input: []schemas.ChatMessage{
+			{Role: schemas.ChatMessageRoleUser, Content: &schemas.ChatMessageContent{ContentStr: schemas.Ptr("think")}},
+		},
+		Params: &schemas.ChatParameters{
+			MaxCompletionTokens: schemas.Ptr(8192),
+			Reasoning:           &schemas.ChatReasoning{MaxTokens: &maxTok},
+		},
+	}
+
+	ctx, cancel := schemas.NewBifrostContextWithCancel(nil)
+	defer cancel()
+	result, err := ToAnthropicChatRequest(ctx, bifrostReq)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Thinking == nil {
+		t.Fatal("expected Thinking to be set")
+	}
+	if result.Thinking.Type != "adaptive" {
+		t.Errorf("expected thinking type 'adaptive' for Opus 4.7, got %q", result.Thinking.Type)
+	}
+	if result.Thinking.BudgetTokens != nil {
+		t.Errorf("expected BudgetTokens to be nil for Opus 4.7, got %v", result.Thinking.BudgetTokens)
+	}
+}
+
+func TestToAnthropicChatRequest_NonOpus47_ReasoningMaxTokens_EnabledWithBudget(t *testing.T) {
+	maxTok := 2048
+
+	bifrostReq := &schemas.BifrostChatRequest{
+		Provider: schemas.Anthropic,
+		Model:    "claude-opus-4-6-20250514",
+		Input: []schemas.ChatMessage{
+			{Role: schemas.ChatMessageRoleUser, Content: &schemas.ChatMessageContent{ContentStr: schemas.Ptr("think")}},
+		},
+		Params: &schemas.ChatParameters{
+			MaxCompletionTokens: schemas.Ptr(8192),
+			Reasoning:           &schemas.ChatReasoning{MaxTokens: &maxTok},
+		},
+	}
+
+	ctx, cancel := schemas.NewBifrostContextWithCancel(nil)
+	defer cancel()
+	result, err := ToAnthropicChatRequest(ctx, bifrostReq)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Thinking == nil {
+		t.Fatal("expected Thinking to be set")
+	}
+	if result.Thinking.Type != "enabled" {
+		t.Errorf("expected thinking type 'enabled' for Opus 4.6, got %q", result.Thinking.Type)
+	}
+	if result.Thinking.BudgetTokens == nil || *result.Thinking.BudgetTokens != maxTok {
+		t.Errorf("expected BudgetTokens %d, got %v", maxTok, result.Thinking.BudgetTokens)
+	}
+}
+
+func TestToAnthropicChatRequest_Opus47_ReasoningEffort_AdaptiveWithEffort(t *testing.T) {
+	effort := "high"
+
+	bifrostReq := &schemas.BifrostChatRequest{
+		Provider: schemas.Anthropic,
+		Model:    "claude-opus-4-7-20260401",
+		Input: []schemas.ChatMessage{
+			{Role: schemas.ChatMessageRoleUser, Content: &schemas.ChatMessageContent{ContentStr: schemas.Ptr("think")}},
+		},
+		Params: &schemas.ChatParameters{
+			MaxCompletionTokens: schemas.Ptr(8192),
+			Reasoning:           &schemas.ChatReasoning{Effort: &effort},
+		},
+	}
+
+	ctx, cancel := schemas.NewBifrostContextWithCancel(nil)
+	defer cancel()
+	result, err := ToAnthropicChatRequest(ctx, bifrostReq)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Thinking == nil {
+		t.Fatal("expected Thinking to be set")
+	}
+	if result.Thinking.Type != "adaptive" {
+		t.Errorf("expected thinking type 'adaptive' for Opus 4.7 effort-based, got %q", result.Thinking.Type)
+	}
+	if result.OutputConfig == nil || result.OutputConfig.Effort == nil {
+		t.Error("expected OutputConfig.Effort to be set for Opus 4.7 effort-based reasoning")
 	}
 }

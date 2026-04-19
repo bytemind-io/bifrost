@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useGetCoreConfigQuery } from "@/lib/store";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { Copy, InfoIcon, KeyRound } from "lucide-react";
-import Link from "next/link";
+import { Link } from "@tanstack/react-router";
 import { useMemo } from "react";
 import ContactUsView from "../views/contactUsView";
 
@@ -43,7 +43,7 @@ curl --location 'http://localhost:8080/v1/chat/completions'
 				<AlertDescription>
 					<p className="text-md text-muted-foreground">
 						To generate API keys, you need to set up admin username and password first.{" "}
-						<Link href="/workspace/config/security" className="text-md text-primary underline">
+						<Link to="/workspace/config/security" className="text-md text-primary underline">
 							Configure Security Settings
 						</Link>
 						.<br />

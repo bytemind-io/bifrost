@@ -30,6 +30,7 @@ export enum RbacResource {
 	APIKeys = "APIKeys",
 	Invitations = "Invitations",
 	Dashboard = "Dashboard",
+	AccessProfiles = "AccessProfiles",
 }
 
 // RBAC Operation Names (must match backend definitions)

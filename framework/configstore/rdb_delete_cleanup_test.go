@@ -42,18 +42,31 @@ func TestDeleteVirtualKey_SharedBudgetAndRateLimit(t *testing.T) {
 	}
 	require.NoError(t, store.CreateVirtualKey(ctx, vk))
 
+	vkBudget := &tables.TableBudget{
+		ID:            "vk-shared-budget",
+		MaxLimit:      20.0,
+		ResetDuration: "1h",
+		VirtualKeyID:  &vk.ID,
+	}
+	require.NoError(t, store.CreateBudget(ctx, vkBudget))
+
 	weight := 1.0
-	budgetID := sharedBudget.ID
 	rateLimitID := sharedRateLimit.ID
 	for _, provider := range []string{"openai", "anthropic"} {
 		pc := &tables.TableVirtualKeyProviderConfig{
 			VirtualKeyID: vk.ID,
 			Provider:     provider,
 			Weight:       &weight,
-			BudgetID:     &budgetID,
 			RateLimitID:  &rateLimitID,
 		}
 		require.NoError(t, store.CreateVirtualKeyProviderConfig(ctx, pc))
+		budget := &tables.TableBudget{
+			ID:               "budget-" + provider,
+			MaxLimit:         10.0,
+			ResetDuration:    "1h",
+			ProviderConfigID: &pc.ID,
+		}
+		require.NoError(t, store.CreateBudget(ctx, budget))
 	}
 
 	configs, err := store.GetVirtualKeyProviderConfigs(ctx, vk.ID)
@@ -69,12 +82,13 @@ func TestDeleteVirtualKey_SharedBudgetAndRateLimit(t *testing.T) {
 		Where("virtual_key_id = ?", vk.ID).Count(&pcCount).Error)
 	assert.Equal(t, int64(0), pcCount, "provider configs must be hard-deleted")
 
-	// Shared Budget / RateLimit gone (first delete succeeds; second is a no-op).
+	// VK-owned budget is removed.
 	var budgetCount int64
 	require.NoError(t, store.db.WithContext(ctx).Model(&tables.TableBudget{}).
-		Where("id = ?", sharedBudget.ID).Count(&budgetCount).Error)
-	assert.Equal(t, int64(0), budgetCount, "shared budget must be cleaned up")
+		Where("id = ?", vkBudget.ID).Count(&budgetCount).Error)
+	assert.Equal(t, int64(0), budgetCount, "vk budget must be cleaned up")
 
+	// Shared provider-config rate limit is removed even when referenced twice.
 	var rateLimitCount int64
 	require.NoError(t, store.db.WithContext(ctx).Model(&tables.TableRateLimit{}).
 		Where("id = ?", sharedRateLimit.ID).Count(&rateLimitCount).Error)
@@ -87,9 +101,11 @@ func TestDeleteVirtualKey_SharedBudgetAndRateLimit(t *testing.T) {
 	assert.False(t, raw.IsActive)
 	assert.NotEqual(t, "vk-shared-value", raw.Value, "value should be tombstoned")
 
-	// Tombstone must NOT still reference the deleted budget/rate limit.
-	assert.Nil(t, raw.BudgetID, "tombstone should drop budget_id reference")
+	// Tombstone must NOT still reference the deleted rate limit, and all budgets must be gone.
 	assert.Nil(t, raw.RateLimitID, "tombstone should drop rate_limit_id reference")
+	require.NoError(t, store.db.WithContext(ctx).Model(&tables.TableBudget{}).
+		Where("virtual_key_id = ?", vk.ID).Count(&budgetCount).Error)
+	assert.Equal(t, int64(0), budgetCount, "tombstone should not keep virtual-key budgets")
 }
 
 // TestDeleteVirtualKey_FullCascade exercises the full cascade path at once:
@@ -116,31 +132,35 @@ func TestDeleteVirtualKey_FullCascade(t *testing.T) {
 	pc2RateLimit := &tables.TableRateLimit{ID: "pc2-ratelimit", TokenMaxLimit: &tokenMax, TokenResetDuration: &tokenDur}
 	require.NoError(t, store.CreateRateLimit(ctx, pc2RateLimit))
 
-	vkBudgetID := vkBudget.ID
-	vkRateLimitID := vkRateLimit.ID
 	vk := &tables.TableVirtualKey{
 		ID:          "vk-cascade",
 		Name:        "Cascade VK",
 		Value:       "vk-cascade-value",
 		IsActive:    true,
-		BudgetID:    &vkBudgetID,
-		RateLimitID: &vkRateLimitID,
+		RateLimitID: &vkRateLimit.ID,
 	}
 	require.NoError(t, store.CreateVirtualKey(ctx, vk))
+	vkBudget.VirtualKeyID = &vk.ID
+	require.NoError(t, store.UpdateBudget(ctx, vkBudget))
 
 	weight := 1.0
-	pc1BudgetID := pc1Budget.ID
 	pc1RateLimitID := pc1RateLimit.ID
-	require.NoError(t, store.CreateVirtualKeyProviderConfig(ctx, &tables.TableVirtualKeyProviderConfig{
+	pc1 := &tables.TableVirtualKeyProviderConfig{
 		VirtualKeyID: vk.ID, Provider: "openai", Weight: &weight,
-		BudgetID: &pc1BudgetID, RateLimitID: &pc1RateLimitID,
-	}))
-	pc2BudgetID := pc2Budget.ID
+		RateLimitID: &pc1RateLimitID,
+	}
+	require.NoError(t, store.CreateVirtualKeyProviderConfig(ctx, pc1))
+	pc1Budget.ProviderConfigID = &pc1.ID
+	require.NoError(t, store.UpdateBudget(ctx, pc1Budget))
+
 	pc2RateLimitID := pc2RateLimit.ID
-	require.NoError(t, store.CreateVirtualKeyProviderConfig(ctx, &tables.TableVirtualKeyProviderConfig{
+	pc2 := &tables.TableVirtualKeyProviderConfig{
 		VirtualKeyID: vk.ID, Provider: "anthropic", Weight: &weight,
-		BudgetID: &pc2BudgetID, RateLimitID: &pc2RateLimitID,
-	}))
+		RateLimitID: &pc2RateLimitID,
+	}
+	require.NoError(t, store.CreateVirtualKeyProviderConfig(ctx, pc2))
+	pc2Budget.ProviderConfigID = &pc2.ID
+	require.NoError(t, store.UpdateBudget(ctx, pc2Budget))
 
 	mcpClient := &tables.TableMCPClient{Name: "mcp-client-x", ConnectionType: "stdio"}
 	require.NoError(t, store.db.WithContext(ctx).Create(mcpClient).Error)
@@ -206,6 +226,5 @@ func TestDeleteVirtualKey_FullCascade(t *testing.T) {
 	var raw tables.TableVirtualKey
 	require.NoError(t, store.db.WithContext(ctx).Unscoped().First(&raw, "id = ?", vk.ID).Error)
 	assert.True(t, raw.DeletedAt.Valid)
-	assert.Nil(t, raw.BudgetID)
 	assert.Nil(t, raw.RateLimitID)
 }

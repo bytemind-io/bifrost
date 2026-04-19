@@ -25,13 +25,13 @@ interface CustomerDialogProps {
 
 interface CustomerFormData {
 	name: string;
-	// Budget (stored as string to allow intermediate decimal states like "1.")
-	budgetMaxLimit: string;
+	// Budget
+	budgetMaxLimit: number | undefined;
 	budgetResetDuration: string;
-	// Rate Limit (stored as string)
-	tokenMaxLimit: string;
+	// Rate Limit
+	tokenMaxLimit: number | undefined;
 	tokenResetDuration: string;
-	requestMaxLimit: string;
+	requestMaxLimit: number | undefined;
 	requestResetDuration: string;
 	isDirty: boolean;
 }
@@ -40,13 +40,13 @@ interface CustomerFormData {
 const createInitialState = (customer?: Customer | null): Omit<CustomerFormData, "isDirty"> => {
 	return {
 		name: customer?.name || "",
-		// Budget (stored as string)
-		budgetMaxLimit: customer?.budget ? String(customer.budget.max_limit) : "",
+		// Budget
+		budgetMaxLimit: customer?.budget?.max_limit ?? undefined,
 		budgetResetDuration: customer?.budget?.reset_duration || "1M",
-		// Rate Limit (stored as string)
-		tokenMaxLimit: customer?.rate_limit?.token_max_limit ? String(customer.rate_limit.token_max_limit) : "",
+		// Rate Limit
+		tokenMaxLimit: customer?.rate_limit?.token_max_limit ?? undefined,
 		tokenResetDuration: customer?.rate_limit?.token_reset_duration || "1h",
-		requestMaxLimit: customer?.rate_limit?.request_max_limit ? String(customer.rate_limit.request_max_limit) : "",
+		requestMaxLimit: customer?.rate_limit?.request_max_limit ?? undefined,
 		requestResetDuration: customer?.rate_limit?.request_reset_duration || "1h",
 	};
 };
@@ -94,10 +94,9 @@ export default function CustomerDialog({ customer, onSave, onCancel }: CustomerD
 		initialState,
 	]);
 
-	// Parse string values to numbers for validation and submission
-	const budgetMaxLimitNum = formData.budgetMaxLimit ? parseFloat(formData.budgetMaxLimit) : undefined;
-	const tokenMaxLimitNum = formData.tokenMaxLimit ? parseInt(formData.tokenMaxLimit) : undefined;
-	const requestMaxLimitNum = formData.requestMaxLimit ? parseInt(formData.requestMaxLimit) : undefined;
+	const budgetMaxLimitNum = formData.budgetMaxLimit;
+	const tokenMaxLimitNum = formData.tokenMaxLimit;
+	const requestMaxLimitNum = formData.requestMaxLimit;
 
 	// Validation
 	const validator = useMemo(
