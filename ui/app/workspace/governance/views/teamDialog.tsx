@@ -468,26 +468,6 @@ export default function TeamDialog({ team, customers, onSave, onCancel }: TeamDi
 								</div>
 							</div>
 						)}
-
-						{isEditing && team?.historical_usage && (
-							<div className="bg-muted/50 space-y-4 rounded-lg border p-4">
-								<p className="text-sm font-medium">Historical Usage</p>
-								<div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-									<div className="space-y-1">
-										<p className="text-muted-foreground text-xs">Total Cost</p>
-										<p className="font-mono text-sm">{formatCurrency(team.historical_usage.total_cost)}</p>
-									</div>
-									<div className="space-y-1">
-										<p className="text-muted-foreground text-xs">Total Tokens</p>
-										<p className="font-mono text-sm">{team.historical_usage.total_tokens.toLocaleString()}</p>
-									</div>
-									<div className="space-y-1">
-										<p className="text-muted-foreground text-xs">Total Requests</p>
-										<p className="font-mono text-sm">{team.historical_usage.total_requests.toLocaleString()}</p>
-									</div>
-								</div>
-							</div>
-						)}
 					</div>
 
 					<FormFooter

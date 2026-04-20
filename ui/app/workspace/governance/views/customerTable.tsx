@@ -146,7 +146,6 @@ export default function CustomersTable({ customers, totalCount, teams, virtualKe
 									<TableHead>Teams</TableHead>
 									<TableHead>Budget</TableHead>
 									<TableHead>Rate Limit</TableHead>
-									<TableHead>Historical Usage</TableHead>
 									<TableHead>Virtual Keys</TableHead>
 									<TableHead className="text-right"></TableHead>
 								</TableRow>
@@ -334,26 +333,6 @@ export default function CustomersTable({ customers, totalCount, teams, virtualKe
 																</TooltipContent>
 															</Tooltip>
 														)}
-													</div>
-												) : (
-													<span className="text-muted-foreground text-sm">-</span>
-												)}
-											</TableCell>
-											<TableCell className="min-w-[190px]">
-												{customer.historical_usage ? (
-													<div className="space-y-1.5 text-sm">
-														<div className="flex items-center justify-between gap-3">
-															<span className="text-muted-foreground text-xs">Cost</span>
-															<span className="font-medium">{formatCurrency(customer.historical_usage.total_cost)}</span>
-														</div>
-														<div className="flex items-center justify-between gap-3">
-															<span className="text-muted-foreground text-xs">Tokens</span>
-															<span className="font-medium">{customer.historical_usage.total_tokens.toLocaleString()}</span>
-														</div>
-														<div className="flex items-center justify-between gap-3">
-															<span className="text-muted-foreground text-xs">Requests</span>
-															<span className="font-medium">{customer.historical_usage.total_requests.toLocaleString()}</span>
-														</div>
 													</div>
 												) : (
 													<span className="text-muted-foreground text-sm">-</span>

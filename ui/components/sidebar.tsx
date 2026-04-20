@@ -596,13 +596,13 @@ export default function AppSidebar() {
 						description: "Manage teams",
 						hasAccess: hasTeamsAccess,
 					},
-					{
-						title: "Business Units",
-						url: "/workspace/governance/business-units",
-						icon: Building2,
-						description: "Manage business units",
-						hasAccess: hasBusinessUnitsAccess,
-					},
+					// {
+					// 	title: "Business Units",
+					// 	url: "/workspace/governance/business-units",
+					// 	icon: Building2,
+					// 	description: "Manage business units",
+					// 	hasAccess: hasBusinessUnitsAccess,
+					// },
 					{
 						title: "Customers",
 						url: "/workspace/governance/customers",
@@ -624,13 +624,13 @@ export default function AppSidebar() {
 						description: "User roles and permissions",
 						hasAccess: hasRbacAccess,
 					},
-					{
-						title: "Access Profiles",
-						url: "/workspace/governance/access-profiles",
-						icon: ShieldCheck,
-						description: "Manage access profiles for roles",
-						hasAccess: hasAccessProfilesAccess,
-					},
+					// {
+					// 	title: "Access Profiles",
+					// 	url: "/workspace/governance/access-profiles",
+					// 	icon: ShieldCheck,
+					// 	description: "Manage access profiles for roles",
+					// 	hasAccess: hasAccessProfilesAccess,
+					// },
 					{
 						title: "Audit Logs",
 						url: "/workspace/audit-logs",
