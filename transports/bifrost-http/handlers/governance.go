@@ -1881,10 +1881,14 @@ func (h *GovernanceHandler) updateTeam(ctx *fasthttp.RequestCtx) {
 			team.Name = *req.Name
 		}
 		if req.CustomerID != nil {
+			// Break the stale belongs-to association loaded by GetTeam. Otherwise
+			// GORM Save() can sync the old Customer relation back into CustomerID.
+			team.Customer = nil
 			if *req.CustomerID == "" {
 				team.CustomerID = nil
 			} else {
-				team.CustomerID = req.CustomerID
+				customerID := *req.CustomerID
+				team.CustomerID = &customerID
 			}
 		}
 		// Handle budget updates
