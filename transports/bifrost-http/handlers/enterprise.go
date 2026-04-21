@@ -16,7 +16,7 @@ import (
 	"github.com/maximhq/bifrost/framework/encrypt"
 	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
 	"github.com/valyala/fasthttp"
-	enterprise "github.com/workpieces/bifrost/plugins/enterprise"
+	"github.com/workpieces/bifrost/plugins/enterprise"
 )
 
 // EnterpriseHandler manages enterprise-specific HTTP endpoints.

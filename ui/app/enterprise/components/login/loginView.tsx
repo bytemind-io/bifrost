@@ -96,7 +96,8 @@ export default function LoginView() {
 				<div className="w-full max-w-md">
 					<div className="border-border bg-card w-full space-y-6 rounded-sm border p-8 ">
 						<div className="flex items-center justify-center">
-							<img src={logoSrc} alt="Bifrost" width={160} height={26} className="" />
+							{/*<img src={logoSrc} alt="Bifrost" width={160} height={26} className="" />*/}
+							<span className="font-bold text-3xl">Model Router</span>
 						</div>
 						<div className="flex items-center justify-center py-8">
 							<div className="text-muted-foreground text-sm">Checking authentication...</div>
@@ -113,7 +114,8 @@ export default function LoginView() {
 				<div className="border-border bg-card w-full space-y-6 rounded-sm border p-8 ">
 					{/* Logo */}
 					<div className="flex items-center justify-center">
-						<img src={logoSrc} alt="Bifrost" width={160} height={26} className="" />
+						{/*<img src={logoSrc} alt="Bifrost" width={160} height={26} className="" />*/}
+						<span className="font-bold text-3xl">Model Router</span>
 					</div>
 
 					<div className="space-y-2 text-center">
