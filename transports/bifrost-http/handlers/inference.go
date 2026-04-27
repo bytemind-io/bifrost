@@ -1806,6 +1806,10 @@ func (h *CompletionHandler) handleStreamingResponse(ctx *fasthttp.RequestCtx, bi
 				continue
 			}
 
+			if lib.ShouldHideResponseExtraFields(ctx) {
+				chunkJSON = lib.StripExtraFieldsKey(chunkJSON)
+			}
+
 			// Format and send as SSE data
 			var eventType string
 			if includeEventType {

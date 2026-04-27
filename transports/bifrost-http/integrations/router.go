@@ -2549,6 +2549,9 @@ func (g *GenericRouter) handleStreaming(ctx *fasthttp.RequestCtx, bifrostCtx *sc
 						g.logger.Warn("Failed to marshal streaming response: %v", err)
 						continue
 					}
+					if lib.ShouldHideResponseExtraFields(ctx) {
+						responseJSON = lib.StripExtraFieldsKey(responseJSON)
+					}
 					sent = reader.SendEvent(eventType, responseJSON)
 				}
 

@@ -251,8 +251,8 @@ const (
 	BifrostContextKeyRequestHeaders                      BifrostContextKey = "bifrost-request-headers"                          // map[string]string (all request headers with lowercased keys)
 	BifrostContextKeySkipListModelsGovernanceFiltering   BifrostContextKey = "bifrost-skip-list-models-governance-filtering"    // bool (set by bifrost - DO NOT SET THIS MANUALLY))
 	BifrostContextKeySCIMClaims                          BifrostContextKey = "scim_claims"
-	BifrostContextKeyUserID                              BifrostContextKey = "bifrost-user-id"                                  // string (to store the user ID (set by enterprise auth middleware - DO NOT SET THIS MANUALLY))
-	BifrostContextKeyUserName                            BifrostContextKey = "bifrost-user-name"                                // string (to store the user name (set by enterprise auth middleware - DO NOT SET THIS MANUALLY))
+	BifrostContextKeyUserID                              BifrostContextKey = "bifrost-user-id"   // string (to store the user ID (set by enterprise auth middleware - DO NOT SET THIS MANUALLY))
+	BifrostContextKeyUserName                            BifrostContextKey = "bifrost-user-name" // string (to store the user name (set by enterprise auth middleware - DO NOT SET THIS MANUALLY))
 	BifrostContextKeyTargetUserID                        BifrostContextKey = "target_user_id"
 	BifrostContextKeyIsAzureUserAgent                    BifrostContextKey = "bifrost-is-azure-user-agent" // bool (set by bifrost - DO NOT SET THIS MANUALLY)) - whether the request is an Azure user agent (only used in gateway)
 	BifrostContextKeyVideoOutputRequested                BifrostContextKey = "bifrost-video-output-requested"
@@ -866,6 +866,10 @@ func (r *BifrostResponse) PopulateExtraFields(requestType RequestType, provider 
 	if resolvedModel == "" {
 		resolvedModel = originalModelRequested
 	}
+	// If an alias mapping was applied, surface the alias (the name the caller asked
+	// for) in the response Model field so clients see what they requested rather
+	// than the upstream provider model identifier.
+	aliasApplied := originalModelRequested != "" && originalModelRequested != resolvedModel
 	switch {
 	case r.ListModelsResponse != nil:
 		r.ListModelsResponse.ExtraFields.RequestType = requestType
@@ -877,36 +881,57 @@ func (r *BifrostResponse) PopulateExtraFields(requestType RequestType, provider 
 		r.TextCompletionResponse.ExtraFields.Provider = provider
 		r.TextCompletionResponse.ExtraFields.OriginalModelRequested = originalModelRequested
 		r.TextCompletionResponse.ExtraFields.ResolvedModelUsed = resolvedModel
+		if aliasApplied {
+			r.TextCompletionResponse.Model = originalModelRequested
+		}
 	case r.ChatResponse != nil:
 		r.ChatResponse.ExtraFields.RequestType = requestType
 		r.ChatResponse.ExtraFields.Provider = provider
 		r.ChatResponse.ExtraFields.OriginalModelRequested = originalModelRequested
 		r.ChatResponse.ExtraFields.ResolvedModelUsed = resolvedModel
+		if aliasApplied {
+			r.ChatResponse.Model = originalModelRequested
+		}
 	case r.ResponsesResponse != nil:
 		r.ResponsesResponse.ExtraFields.RequestType = requestType
 		r.ResponsesResponse.ExtraFields.Provider = provider
 		r.ResponsesResponse.ExtraFields.OriginalModelRequested = originalModelRequested
 		r.ResponsesResponse.ExtraFields.ResolvedModelUsed = resolvedModel
+		if aliasApplied {
+			r.ResponsesResponse.Model = originalModelRequested
+		}
 	case r.ResponsesStreamResponse != nil:
 		r.ResponsesStreamResponse.ExtraFields.RequestType = requestType
 		r.ResponsesStreamResponse.ExtraFields.Provider = provider
 		r.ResponsesStreamResponse.ExtraFields.OriginalModelRequested = originalModelRequested
 		r.ResponsesStreamResponse.ExtraFields.ResolvedModelUsed = resolvedModel
+		if aliasApplied && r.ResponsesStreamResponse.Response != nil {
+			r.ResponsesStreamResponse.Response.Model = originalModelRequested
+		}
 	case r.CountTokensResponse != nil:
 		r.CountTokensResponse.ExtraFields.RequestType = requestType
 		r.CountTokensResponse.ExtraFields.Provider = provider
 		r.CountTokensResponse.ExtraFields.OriginalModelRequested = originalModelRequested
 		r.CountTokensResponse.ExtraFields.ResolvedModelUsed = resolvedModel
+		if aliasApplied {
+			r.CountTokensResponse.Model = originalModelRequested
+		}
 	case r.EmbeddingResponse != nil:
 		r.EmbeddingResponse.ExtraFields.RequestType = requestType
 		r.EmbeddingResponse.ExtraFields.Provider = provider
 		r.EmbeddingResponse.ExtraFields.OriginalModelRequested = originalModelRequested
 		r.EmbeddingResponse.ExtraFields.ResolvedModelUsed = resolvedModel
+		if aliasApplied {
+			r.EmbeddingResponse.Model = originalModelRequested
+		}
 	case r.RerankResponse != nil:
 		r.RerankResponse.ExtraFields.RequestType = requestType
 		r.RerankResponse.ExtraFields.Provider = provider
 		r.RerankResponse.ExtraFields.OriginalModelRequested = originalModelRequested
 		r.RerankResponse.ExtraFields.ResolvedModelUsed = resolvedModel
+		if aliasApplied {
+			r.RerankResponse.Model = originalModelRequested
+		}
 	case r.SpeechResponse != nil:
 		r.SpeechResponse.ExtraFields.RequestType = requestType
 		r.SpeechResponse.ExtraFields.Provider = provider
@@ -932,6 +957,9 @@ func (r *BifrostResponse) PopulateExtraFields(requestType RequestType, provider 
 		r.ImageGenerationResponse.ExtraFields.Provider = provider
 		r.ImageGenerationResponse.ExtraFields.OriginalModelRequested = originalModelRequested
 		r.ImageGenerationResponse.ExtraFields.ResolvedModelUsed = resolvedModel
+		if aliasApplied {
+			r.ImageGenerationResponse.Model = originalModelRequested
+		}
 	case r.ImageGenerationStreamResponse != nil:
 		r.ImageGenerationStreamResponse.ExtraFields.RequestType = requestType
 		r.ImageGenerationStreamResponse.ExtraFields.Provider = provider
@@ -942,6 +970,9 @@ func (r *BifrostResponse) PopulateExtraFields(requestType RequestType, provider 
 		r.VideoGenerationResponse.ExtraFields.Provider = provider
 		r.VideoGenerationResponse.ExtraFields.OriginalModelRequested = originalModelRequested
 		r.VideoGenerationResponse.ExtraFields.ResolvedModelUsed = resolvedModel
+		if aliasApplied {
+			r.VideoGenerationResponse.Model = originalModelRequested
+		}
 	case r.VideoDownloadResponse != nil:
 		r.VideoDownloadResponse.ExtraFields.RequestType = requestType
 		r.VideoDownloadResponse.ExtraFields.Provider = provider

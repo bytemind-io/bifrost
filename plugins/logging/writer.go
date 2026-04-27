@@ -330,12 +330,16 @@ func buildCompleteLogEntryFromPending(pending *PendingLogData) *logstore.Log {
 	return entry
 }
 
-// applyModelAlias sets entry.Model to resolvedModel (falling back to requestedModel if empty)
-// and entry.Alias to requestedModel when the two differ (i.e. an alias mapping was applied).
+// applyModelAlias surfaces the caller-facing alias (requestedModel) in entry.Model
+// so the call log displays what the user asked for, and stores the resolved
+// upstream model identifier in entry.Alias for traceability when the two differ.
+// When no alias mapping was applied, entry.Model holds the actual model name and
+// entry.Alias is cleared.
 func applyModelAlias(entry *logstore.Log, requestedModel, resolvedModel string) {
 	if resolvedModel != "" && resolvedModel != requestedModel {
-		entry.Model = resolvedModel
-		entry.Alias = &requestedModel
+		entry.Model = requestedModel
+		resolved := resolvedModel
+		entry.Alias = &resolved
 	} else {
 		// No alias mapping; keep whichever value is non-empty as the model.
 		if resolvedModel != "" {

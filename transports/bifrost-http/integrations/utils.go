@@ -232,6 +232,10 @@ func (g *GenericRouter) sendSuccess(ctx *fasthttp.RequestCtx, bifrostCtx *schema
 		return
 	}
 
+	if lib.ShouldHideResponseExtraFields(ctx) {
+		responseBody = lib.StripExtraFieldsKey(responseBody)
+	}
+
 	ctx.SetBody(responseBody)
 }
 

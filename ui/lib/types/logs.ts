@@ -455,7 +455,7 @@ export interface LogEntry {
   timestamp: string; // ISO string format from Go time.Time
   provider: string;
   model: string;
-  alias?: string; // Set when model was resolved via alias mapping; the original name the caller used
+  alias?: string; // Set when an alias mapping was applied; holds the resolved upstream model identifier (model holds the alias the caller used)
   number_of_retries: number;
   fallback_index: number;
   attempt_trail?: KeyAttemptRecord[]; // Per-attempt key selection history
