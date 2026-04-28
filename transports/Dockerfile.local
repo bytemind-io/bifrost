@@ -50,7 +50,7 @@
     go work use ./transports
 
   # Download external (non-local) dependencies
-  RUN cd /build/transports && go mod download
+  RUN cd /build/transports && go mod download -x
 
   # Copy UI build output into transports
   COPY --from=ui-builder /app/out ./transports/bifrost-http/ui

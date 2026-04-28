@@ -134,6 +134,7 @@ type BifrostHTTPServer struct {
 	TracingMiddleware *handlers.TracingMiddleware
 	WSTicketStore     *handlers.WSTicketStore
 
+	RoleStore         *enterprise.RoleStore
 	EnterpriseHandler *handlers.EnterpriseHandler
 
 	wsPool *bfws.Pool
@@ -1062,7 +1063,7 @@ func (s *BifrostHTTPServer) RegisterAPIRoutes(ctx context.Context, callbacks Ser
 	var loggingHandler *handlers.LoggingHandler
 	loggerPlugin, _ := lib.FindPluginAs[*logging.LoggerPlugin](s.Config, logging.PluginName)
 	if loggerPlugin != nil {
-		loggingHandler = handlers.NewLoggingHandler(loggerPlugin.GetPluginLogManager(), s, s.Config)
+		loggingHandler = handlers.NewLoggingHandler(loggerPlugin.GetPluginLogManager(), s, s.RoleStore, s.Config)
 	}
 	var governanceHandler *handlers.GovernanceHandler
 	governancePluginName := governance.PluginName
@@ -1279,6 +1280,7 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 		if roleErr != nil {
 			logger.Error("failed to initialize enterprise role store: %v", roleErr)
 		}
+		s.RoleStore = roleStore
 		if userStore != nil && auditStore != nil && roleStore != nil {
 			s.EnterpriseHandler = handlers.NewEnterpriseHandler(userStore, auditStore, roleStore, s.Config.ConfigStore)
 			// Seed default admin from env or fallback to dev defaults

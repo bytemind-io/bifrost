@@ -19,6 +19,7 @@ import (
 	"github.com/maximhq/bifrost/plugins/logging"
 	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
 	"github.com/valyala/fasthttp"
+	"github.com/workpieces/bifrost/plugins/enterprise"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -27,6 +28,7 @@ type LoggingHandler struct {
 	logManager          logging.LogManager
 	redactedKeysManager RedactedKeysManager
 	config              *lib.Config
+	roleStore           *enterprise.RoleStore
 }
 
 // Keep session log page size in one place so the session sheet limit is easy to tune later.
@@ -49,10 +51,11 @@ type RedactedKeysManager interface {
 }
 
 // NewLoggingHandler creates a new logging handler instance
-func NewLoggingHandler(logManager logging.LogManager, redactedKeysManager RedactedKeysManager, config *lib.Config) *LoggingHandler {
+func NewLoggingHandler(logManager logging.LogManager, redactedKeysManager RedactedKeysManager, roleStore *enterprise.RoleStore, config *lib.Config) *LoggingHandler {
 	return &LoggingHandler{
 		logManager:          logManager,
 		redactedKeysManager: redactedKeysManager,
+		roleStore:           roleStore,
 		config:              config,
 	}
 }
@@ -97,6 +100,14 @@ func (h *LoggingHandler) RegisterRoutes(r *router.Router, middlewares ...schemas
 	r.GET("/api/mcp-logs/histogram/cost", lib.ChainMiddlewares(h.getMCPCostHistogram, middlewares...))
 	r.GET("/api/mcp-logs/histogram/top-tools", lib.ChainMiddlewares(h.getMCPTopTools, middlewares...))
 	r.DELETE("/api/mcp-logs", lib.ChainMiddlewares(h.deleteMCPLogs, middlewares...))
+}
+
+func (h *LoggingHandler) hasAliasPermission(ctx *fasthttp.RequestCtx) bool {
+	roleName, _ := ctx.UserValue(enterprise.CtxKeyUserRole).(string)
+	if strings.EqualFold(roleName, "Admin") {
+		return true
+	}
+	return h.roleStore.IsAllowed(roleName, enterprise.ResourceModelProvider, enterprise.OpView)
 }
 
 // getLogSessionByID handles GET /api/logs/sessions/{session_id} - Get logs in a single session.
@@ -198,6 +209,11 @@ func (h *LoggingHandler) getLogSessionByID(ctx *fasthttp.RequestCtx) {
 		}
 	}
 
+	if !h.hasAliasPermission(ctx) {
+		for _, log := range result.Logs {
+			log.Alias = nil
+		}
+	}
 	SendJSON(ctx, result)
 }
 
@@ -410,6 +426,11 @@ func (h *LoggingHandler) getLogs(ctx *fasthttp.RequestCtx) {
 		}
 	}
 
+	if !h.hasAliasPermission(ctx) {
+		for _, log := range result.Logs {
+			log.Alias = nil
+		}
+	}
 	SendJSON(ctx, result)
 }
 
@@ -446,6 +467,9 @@ func (h *LoggingHandler) getLogByID(ctx *fasthttp.RequestCtx) {
 		log.RoutingRule = findRedactedRoutingRule(redactedRoutingRules, *log.RoutingRuleID, *log.RoutingRuleName)
 	}
 
+	if !h.hasAliasPermission(ctx) {
+		log.Alias = nil
+	}
 	SendJSON(ctx, log)
 }
 
@@ -922,13 +946,15 @@ func (h *LoggingHandler) getAvailableFilterData(ctx *fasthttp.RequestCtx) {
 		mu.Unlock()
 		return nil
 	})
-	g.Go(func() error {
-		result := h.logManager.GetAvailableAliases(gCtx)
-		mu.Lock()
-		aliases = result
-		mu.Unlock()
-		return nil
-	})
+	if h.hasAliasPermission(ctx) {
+		g.Go(func() error {
+			result := h.logManager.GetAvailableAliases(gCtx)
+			mu.Lock()
+			aliases = result
+			mu.Unlock()
+			return nil
+		})
+	}
 	g.Go(func() error {
 		result := h.logManager.GetAvailableSelectedKeys(gCtx)
 		mu.Lock()
